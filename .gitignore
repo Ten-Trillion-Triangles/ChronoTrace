@@ -1,0 +1,9 @@
+.gradle/
+.kotlin/
+build/
+dist/
+node_modules/
+.idea/
+.DS_Store
+*.iml
+.codex

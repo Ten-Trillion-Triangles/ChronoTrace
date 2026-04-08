@@ -1,0 +1,49 @@
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.dsl.JsModuleKind
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
+import org.gradle.api.tasks.bundling.Jar
+
+plugins {
+    kotlin("multiplatform")
+}
+
+@OptIn(ExperimentalWasmDsl::class)
+kotlin {
+    jvm()
+    js(IR) {
+        browser()
+        nodejs()
+    }
+    wasmJs {
+        browser()
+        nodejs()
+    }
+
+    sourceSets {
+        commonMain.dependencies {
+            implementation(project(":chronotrace-contract"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+            implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.7.1")
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+        }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+        }
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+}
+
+val chronoTraceCompilerPluginJar = rootProject.project(":chronotrace-kotlin-plugin").tasks.named("jar", Jar::class.java)
+
+tasks.withType(KotlinCompilationTask::class.java).configureEach {
+    dependsOn(chronoTraceCompilerPluginJar)
+    compilerOptions.freeCompilerArgs.addAll(
+        project.provider {
+            listOf("-Xplugin=${chronoTraceCompilerPluginJar.get().archiveFile.get().asFile.absolutePath}")
+        },
+    )
+}

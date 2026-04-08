@@ -1,0 +1,24 @@
+services:
+  chronotrace-server:
+    build:
+      context: .
+      dockerfile: chronotrace-server/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      CHRONOTRACE_AUTH_MODE: none
+      CHRONOTRACE_BIND_HOST: 0.0.0.0
+      CHRONOTRACE_STORAGE_MODE: clickhouse
+      CHRONOTRACE_CLICKHOUSE_JDBC_URL: jdbc:clickhouse://clickhouse:8123/default
+      CHRONOTRACE_CLICKHOUSE_DATABASE: chronotrace
+      CHRONOTRACE_VALKEY_HOST: valkey
+      CHRONOTRACE_VALKEY_PORT: 6379
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+  valkey:
+    image: valkey/valkey:8.0
+    ports:
+      - "6379:6379"
