@@ -1,9 +1,21 @@
 {
   "name": "@chronotrace/sdk-ts",
   "version": "0.1.0",
-  "private": true,
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "AI-native temporal logging SDK for TypeScript and JavaScript",
+  "main": "dist/src/index.js",
+  "module": "dist/src/index.js",
+  "browser": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "require": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check:contracts": "node ./scripts/check-generated-contracts.mjs",
@@ -13,5 +25,17 @@
     "@types/node": "^24.0.0",
     "typescript": "^5.8.2",
     "vitest": "^3.0.8"
+  },
+  "keywords": [
+    "tracing",
+    "logging",
+    "observability",
+    "telemetry",
+    "ai-native"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/chronotrace"
   }
 }
