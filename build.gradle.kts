@@ -6,8 +6,8 @@ plugins {
 }
 
 allprojects {
-    group = "org.chronotrace"
-    version = "0.1.0"
+    group = "com.chronotrace"
+    version = "0.1.0-SNAPSHOT"
 
     repositories {
         mavenCentral()

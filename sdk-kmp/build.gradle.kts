@@ -2,9 +2,11 @@ import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JsModuleKind
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
 import org.gradle.api.tasks.bundling.Jar
+import org.gradle.plugin.use.PluginDependencySpec
 
 plugins {
     kotlin("multiplatform")
+    `maven-publish`
 }
 
 @OptIn(ExperimentalWasmDsl::class)
@@ -29,6 +31,17 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+        }
+    }
+}
+
+publishing {
+    publications.withType<MavenPublication>().configureEach {
+        artifactId = when (name) {
+            "jvm" -> "sdk-kmp-jvm"
+            "js" -> "sdk-kmp-js"
+            "wasmJs" -> "sdk-kmp-wasm"
+            else -> artifactId
         }
     }
 }
