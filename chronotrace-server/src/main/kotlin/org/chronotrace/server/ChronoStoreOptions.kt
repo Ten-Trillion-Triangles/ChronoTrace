@@ -34,4 +34,8 @@ data class ChronoStoreOptions(
     val retentionDaysFrames: Long = 7,
     val clickHouse: ClickHouseConfig? = null,
     val valkey: ValkeyConfig? = null,
+    /** Allowed API keys for apiKey auth mode (set of key values). */
+    val apiKeys: Set<String> = emptySet(),
+    /** Bearer token for bearer auth mode. */
+    val bearerToken: String? = null,
 )
