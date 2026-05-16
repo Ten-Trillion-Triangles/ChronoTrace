@@ -89,10 +89,10 @@ class E2eIntegrationTest {
         });
 
         // Explicit frame via captureLocals on withSpan
-        await withSpan('user-auth', {
-            captureLocals: { userId: 'user-42', sessionId: 'sess-abc', roles: ['admin'] },
-        }, async () => {
+        await withSpan('user-auth', async () => {
             await ChronoLogger.warn('user authenticated', { mfaUsed: true });
+        }, {
+            captureLocals: { userId: 'user-42', sessionId: 'sess-abc', roles: ['admin'] },
         });
 
         rootSpan.end('OK');
@@ -100,7 +100,9 @@ class E2eIntegrationTest {
         // Standalone fatal log
         await ChronoLogger.fatal('unrecoverable error -- forcing flush', { errorCode: 'E999', component: 'payment-gateway' });
 
+        // Force flush then shutdown, then wait for final transport to complete
         await ChronoTrace.shutdown();
+        await new Promise(r => setTimeout(r, 1000));
         console.log('SDK_EMIT_COMPLETE');
     }
 
@@ -245,9 +247,12 @@ class E2eIntegrationTest {
                     environment: 'test',
                     serviceName: 'field-verify-service',
                     serverUrl: process.argv[2],
+                    captureConfig: { autoCaptureLevels: ['ERROR', 'FATAL'] },
+                    bufferConfig: { flushIntervalMs: 50 },
                 });
                 await ChronoLogger.info('field structure test', { userId: 'u123', action: 'login', success: true });
                 await ChronoTrace.shutdown();
+                await new Promise(r => setTimeout(r, 500));
                 console.log('DONE');
             }
             main().catch(e => { console.error(e.message); process.exit(1); });
