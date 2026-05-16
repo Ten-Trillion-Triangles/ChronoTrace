@@ -21,8 +21,14 @@ dependencies {
     implementation("io.ktor:ktor-server-call-logging-jvm:3.1.1")
     implementation("redis.clients:jedis:5.2.0")
     implementation("ch.qos.logback:logback-classic:1.5.18")
+    implementation("io.github.oshai:kotlin-logging:7.0.14")
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-server-test-host-jvm:3.1.1")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.2.21")
+    testImplementation("org.testcontainers:clickhouse:1.21.3")
+    testImplementation("org.testcontainers:junit-jupiter:1.21.3")
+    testImplementation("org.junit.jupiter:junit-jupiter-engine:5.12.2")
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.12.2")
 }
 
 tasks.test {
