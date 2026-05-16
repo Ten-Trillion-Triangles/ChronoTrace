@@ -15,6 +15,8 @@ fun main() {
         retentionDaysLogs = System.getenv("CHRONOTRACE_RETENTION_LOGS_DAYS")?.toLongOrNull() ?: 30L,
         retentionDaysSpans = System.getenv("CHRONOTRACE_RETENTION_SPANS_DAYS")?.toLongOrNull() ?: 30L,
         retentionDaysFrames = System.getenv("CHRONOTRACE_RETENTION_FRAMES_DAYS")?.toLongOrNull() ?: 7L,
+        apiKeys = System.getenv("CHRONOTRACE_API_KEYS")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet() ?: emptySet(),
+        bearerToken = System.getenv("CHRONOTRACE_BEARER_TOKEN"),
         clickHouse = System.getenv("CHRONOTRACE_CLICKHOUSE_JDBC_URL")?.let { jdbcUrl ->
             ClickHouseConfig(
                 jdbcUrl = jdbcUrl,

@@ -39,14 +39,14 @@ class E2eIntegrationTest {
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true; prettyPrint = true }
 
     private val sdkEmitScript = """
-    const { ChronoTraceClient } = require('/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts/dist/src/index.js');
+    const { ChronoTrace, ChronoLogger, startSpan, withSpan } = require('/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts/dist/src/index.js');
 
     async function main() {
         const serverUrl = process.argv[2];
         const appId = 'e2e-test-app';
         const environment = 'test';
 
-        const client = new ChronoTraceClient({
+        ChronoTrace.init({
             appId,
             environment,
             serviceName: 'e2e-test-service',
@@ -61,24 +61,22 @@ class E2eIntegrationTest {
             },
         });
 
-        await client.init();
-
         // Parent span: checkout
-        const rootSpan = client.startSpan('checkout');
-        // Child span: process-payment
-        const childSpan = client.startSpan('process-payment', {
+        const rootSpan = startSpan('checkout');
+        // Child span: process-payment with captureLocals
+        const childSpan = startSpan('process-payment', {
             attributes: { amount: '100.00', currency: 'USD' },
             captureLocals: { orderId: 'ORD-999', userId: 'user-42' },
         });
 
         // Log inside child span
-        await client.info('payment processing started', { orderId: 'ORD-999', method: 'card' });
+        await ChronoLogger.info('payment processing started', { orderId: 'ORD-999', method: 'card' });
 
         // Grandchild span: validate-card
-        const grandchildSpan = client.startSpan('validate-card');
+        const grandchildSpan = startSpan('validate-card');
 
         // Log at grandchild level with error -- auto-capture on ERROR level triggers frame linkage
-        await client.error('card validation failed', { reason: 'insufficient_funds', last4: '1234' });
+        await ChronoLogger.error('card validation failed', { reason: 'insufficient_funds', last4: '1234' });
 
         grandchildSpan.end('ERROR');
 
@@ -86,23 +84,23 @@ class E2eIntegrationTest {
         childSpan.end('OK');
 
         // Async work under root
-        await client.withSpan('async-db-write', async () => {
-            await client.info('db write complete', { rowsAffected: 3, durationMs: 12 });
+        await withSpan('async-db-write', async () => {
+            await ChronoLogger.info('db write complete', { rowsAffected: 3, durationMs: 12 });
         });
 
         // Explicit frame via captureLocals on withSpan
-        await client.withSpan('user-auth', {
+        await withSpan('user-auth', {
             captureLocals: { userId: 'user-42', sessionId: 'sess-abc', roles: ['admin'] },
         }, async () => {
-            await client.warn('user authenticated', { mfaUsed: true });
+            await ChronoLogger.warn('user authenticated', { mfaUsed: true });
         });
 
         rootSpan.end('OK');
 
         // Standalone fatal log
-        await client.fatal('unrecoverable error -- forcing flush', { errorCode: 'E999', component: 'payment-gateway' });
+        await ChronoLogger.fatal('unrecoverable error -- forcing flush', { errorCode: 'E999', component: 'payment-gateway' });
 
-        await client.shutdown();
+        await ChronoTrace.shutdown();
         console.log('SDK_EMIT_COMPLETE');
     }
 
@@ -240,17 +238,16 @@ class E2eIntegrationTest {
             waitForServer(port)
 
             val sdkEmitScript = """
-            const { ChronoTraceClient } = require('/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts/dist/src/index.js');
+            const { ChronoTrace, ChronoLogger } = require('/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts/dist/src/index.js');
             async function main() {
-                const client = new ChronoTraceClient({
+                ChronoTrace.init({
                     appId: 'field-verification',
                     environment: 'test',
                     serviceName: 'field-verify-service',
                     serverUrl: process.argv[2],
                 });
-                await client.init();
-                await client.info('field structure test', { userId: 'u123', action: 'login', success: true });
-                await client.shutdown();
+                await ChronoLogger.info('field structure test', { userId: 'u123', action: 'login', success: true });
+                await ChronoTrace.shutdown();
                 console.log('DONE');
             }
             main().catch(e => { console.error(e.message); process.exit(1); });

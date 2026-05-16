@@ -32,8 +32,8 @@ import org.chronotrace.contract.TraceView
 import redis.clients.jedis.JedisPooled
 
 class ChronoStore(
-    private val authMode: String,
-    private val options: ChronoStoreOptions = ChronoStoreOptions(),
+    val authMode: String,
+    val options: ChronoStoreOptions = ChronoStoreOptions(),
 ) : ChronoStoreBackend, Closeable {
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private val rules = ConcurrentHashMap<String, RemoteRule>()
