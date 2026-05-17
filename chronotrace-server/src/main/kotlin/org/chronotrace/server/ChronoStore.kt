@@ -239,6 +239,7 @@ class ChronoStore(
         val keyId = keyValue
         val metadata = ApiKeyMetadata(
             keyId = keyId,
+            keyValue = keyValue,
             createdAtUtc = now,
             role = role,
             quota = quota,
@@ -258,12 +259,11 @@ class ChronoStore(
         val newKeyValue = generateSecureKey()
         val now = Instant.now().toEpochMilli()
         val updated = current.copy(
-            keyId = newKeyValue, // keyId IS the keyValue — rotation changes the identity
+            keyValue = newKeyValue,
             rotatedAtUtc = now,
         )
-        // Remove old keyId, add new keyId
-        keyRegistry.remove(keyId)
-        keyRegistry[newKeyValue] = updated
+        // Update the existing keyId with new metadata (keyId stays stable across rotations)
+        keyRegistry[keyId] = updated
         return updated to newKeyValue
     }
 

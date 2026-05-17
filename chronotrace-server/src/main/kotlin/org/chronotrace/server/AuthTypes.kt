@@ -42,6 +42,7 @@ data class ApiKeyQuota(
 @Serializable
 data class ApiKeyMetadata(
     val keyId: String,
+    val keyValue: String? = null, // null for stored keys; only non-null immediately after create/rotate
     val createdAtUtc: Long,
     val rotatedAtUtc: Long? = null,
     val revokedAtUtc: Long? = null,
