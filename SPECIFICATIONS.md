@@ -297,6 +297,6 @@ The following items require deeper investigation or architectural decision:
 
 4. **Kotlin plugin compilation scope**: `sdk-kmp/build.gradle.kts` adds `dependsOn(chronoTraceCompilerPluginJar)` to ALL `KotlinCompilationTask` tasks. This means the plugin loads even for test compilation, metadata generation, etc. Is this intentional, or should it be scoped to production compilation only?
 
-5. **Release model**: Who can publish to Docker Hub (`chronotrace/chronotrace-server`) and npm (`@chronotrace/sdk-ts`)? Is there a formal release process or approval workflow?
+5. **Release model**: None planned yet — will be defined when the framework is production ready and tested.
 
-6. **RuleDeliveryConfirmation flow**: The contract defines `RuleDeliveryConfirmation` and `RuleDeliveryStatus` (PENDING, CONFIRMED, FAILED), but no server-side handler for these was found. There's `triggeredRuleId` on `LogRecord` and `RuleDeliveryConfirmation` in the contract — is there a flow where the SDK confirms rule triggering back to the server?
+6. **RuleDeliveryConfirmation flow**: Presumed planned but not yet implemented.
