@@ -128,7 +128,7 @@ class AuthTest {
     fun `bearer mode rejects request without Authorization header`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
-                bearerToken = "secret-token-456",
+                bearerTokens = setOf("secret-token-456"),
             )))
         }
 
@@ -144,7 +144,7 @@ class AuthTest {
     fun `bearer mode rejects request with wrong Bearer token`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
-                bearerToken = "secret-token-456",
+                bearerTokens = setOf("secret-token-456"),
             )))
         }
 
@@ -161,7 +161,7 @@ class AuthTest {
     fun `bearer mode rejects request with wrong auth scheme`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
-                bearerToken = "secret-token-456",
+                bearerTokens = setOf("secret-token-456"),
             )))
         }
 
@@ -178,7 +178,7 @@ class AuthTest {
     fun `bearer mode accepts request with valid Bearer token`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
-                bearerToken = "secret-token-456",
+                bearerTokens = setOf("secret-token-456"),
             )))
         }
 
@@ -195,7 +195,7 @@ class AuthTest {
     fun `bearer mode applies to query endpoints`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
-                bearerToken = "secret-token-456",
+                bearerTokens = setOf("secret-token-456"),
             )))
         }
 
@@ -289,7 +289,7 @@ class AuthTest {
     fun `bearer mode protects MCP endpoint`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
-                bearerToken = "secret-token-456",
+                bearerTokens = setOf("secret-token-456"),
             )))
         }
 

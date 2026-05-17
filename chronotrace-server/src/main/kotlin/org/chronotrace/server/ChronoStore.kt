@@ -194,7 +194,8 @@ class ChronoStore(
      * Returns null if the request is allowed.
      * Returns a [QuotaExceeded] with retry information if the key has exceeded its quota.
      */
-    fun checkQuota(keyId: String): QuotaExceeded? {
+    fun checkQuota(keyId: String?): QuotaExceeded? {
+        if (keyId == null) return null
         val metadata = keyRegistry[keyId] ?: return null // unknown key — let auth decide
         if (metadata.isRevoked) return QuotaExceeded(
             retryAfterSeconds = 0,
@@ -209,7 +210,8 @@ class ChronoStore(
      * Record a successful request for quota accounting.
      * Called by the HTTP layer after a successful response.
      */
-    fun recordRequest(keyId: String) {
+    fun recordRequest(keyId: String?) {
+        if (keyId == null) return
         quotaTracker.recordRequest(keyId)
     }
 

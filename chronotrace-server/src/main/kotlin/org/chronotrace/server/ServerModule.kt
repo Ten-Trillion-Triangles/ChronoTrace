@@ -91,14 +91,14 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                 return@post
             }
             val keyId = authResult?.second
-            if (!call.quotaCheck(store, keyId)) return@post
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@post
 
             val start = System.currentTimeMillis()
             metrics.recordIngest()
             try {
                 val batch = call.receive<IngestBatch>()
                 store.ingest(batch)
-                store.recordRequest(keyId)
+                keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
                 call.respond(mapOf("accepted" to true))
                 call.recordAudit(store, keyId = keyId, action = "ingest", endpoint = "/api/v1/ingest",
                     method = "POST", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start,
@@ -140,7 +140,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                         try {
                             val batch = json.decodeFromString<IngestBatch>(frame.readText())
                             store.ingest(batch)
-                            store.recordRequest(keyId)
+                            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
                             send(Frame.Text("""{"accepted":true}"""))
                             call.recordAudit(store, keyId = keyId, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
                                 method = "WS", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start,
@@ -159,19 +159,22 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         post("/api/v1/logs/search") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@post
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "search", endpoint = "/api/v1/logs/search",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "search", endpoint = "/api/v1/logs/search",
                     method = "POST", outcome = "unauthorized", statusCode = 401)
                 return@post
             }
-            if (!call.quotaCheck(store, keyId!!)) return@post
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@post
 
             val start = System.currentTimeMillis()
             try {
                 val request = call.receive<SearchLogsRequest>()
                 val response = store.searchLogs(request)
-                store.recordRequest(keyId)
+                keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
                 metrics.recordQueryLatency(System.currentTimeMillis() - start)
                 call.respond(response)
                 call.recordAudit(store, keyId = keyId, action = "search", endpoint = "/api/v1/logs/search",
@@ -186,18 +189,21 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/logs/{logId}") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@get
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "get_log", endpoint = "/api/v1/logs/{logId}",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "get_log", endpoint = "/api/v1/logs/{logId}",
                     method = "GET", outcome = "unauthorized", statusCode = 401)
                 return@get
             }
-            if (!call.quotaCheck(store, keyId!!)) return@get
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@get
 
             val start = System.currentTimeMillis()
             val logId = requireNotNull(call.parameters["logId"])
             val log = store.getLog(logId)
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respond(log ?: mapOf("error" to "Log not found"))
             call.recordAudit(store, keyId = keyId, action = "get_log", endpoint = "/api/v1/logs/{logId}",
                 method = "GET", outcome = if (log != null) "success" else "not_found",
@@ -205,18 +211,21 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/frames/{frameId}") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@get
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "get_frame", endpoint = "/api/v1/frames/{frameId}",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "get_frame", endpoint = "/api/v1/frames/{frameId}",
                     method = "GET", outcome = "unauthorized", statusCode = 401)
                 return@get
             }
-            if (!call.quotaCheck(store, keyId!!)) return@get
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@get
 
             val start = System.currentTimeMillis()
             val frameId = requireNotNull(call.parameters["frameId"])
             val frame = store.getFrame(frameId)
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respond(frame ?: mapOf("error" to "Frame not found"))
             call.recordAudit(store, keyId = keyId, action = "get_frame", endpoint = "/api/v1/frames/{frameId}",
                 method = "GET", outcome = if (frame != null) "success" else "not_found",
@@ -224,66 +233,78 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/traces/{traceId}") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@get
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "get_trace", endpoint = "/api/v1/traces/{traceId}",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "get_trace", endpoint = "/api/v1/traces/{traceId}",
                     method = "GET", outcome = "unauthorized", statusCode = 401)
                 return@get
             }
-            if (!call.quotaCheck(store, keyId!!)) return@get
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@get
 
             val start = System.currentTimeMillis()
             val traceId = requireNotNull(call.parameters["traceId"])
             val trace = store.getTrace(traceId)
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respond(trace)
             call.recordAudit(store, keyId = keyId, action = "get_trace", endpoint = "/api/v1/traces/{traceId}",
                 method = "GET", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
         }
 
         post("/api/v1/remote-rules") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@post
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "upsert_rule", endpoint = "/api/v1/remote-rules",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "upsert_rule", endpoint = "/api/v1/remote-rules",
                     method = "POST", outcome = "unauthorized", statusCode = 401)
                 return@post
             }
-            if (!call.quotaCheck(store, keyId!!)) return@post
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@post
 
             val start = System.currentTimeMillis()
             val rule = call.receive<RemoteRule>()
             store.upsertRule(rule)
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respond(rule)
             call.recordAudit(store, keyId = keyId, action = "upsert_rule", endpoint = "/api/v1/remote-rules",
                 method = "POST", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
         }
 
         get("/api/v1/remote-rules") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@get
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "list_rules", endpoint = "/api/v1/remote-rules",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "list_rules", endpoint = "/api/v1/remote-rules",
                     method = "GET", outcome = "unauthorized", statusCode = 401)
                 return@get
             }
-            if (!call.quotaCheck(store, keyId!!)) return@get
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@get
 
             val start = System.currentTimeMillis()
             val rules = store.listRules(call.request.queryParameters["appId"])
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respond(rules)
             call.recordAudit(store, keyId = keyId, action = "list_rules", endpoint = "/api/v1/remote-rules",
                 method = "GET", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
         }
 
         post("/api/v1/purge") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@post
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "purge", endpoint = "/api/v1/purge",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "purge", endpoint = "/api/v1/purge",
                     method = "POST", outcome = "unauthorized", statusCode = 401)
                 return@post
             }
-            if (!call.quotaCheck(store, keyId!!)) return@post
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@post
 
             val start = System.currentTimeMillis()
             val body = call.receive<Map<String, String>>()
@@ -292,24 +313,27 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                 field = requireNotNull(body["field"]),
                 value = requireNotNull(body["value"]),
             )
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respond(job)
             call.recordAudit(store, keyId = keyId, action = "purge", endpoint = "/api/v1/purge",
                 method = "POST", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
         }
 
         get("/api/v1/purge/{purgeJobId}") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@get
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "get_purge_job", endpoint = "/api/v1/purge/{purgeJobId}",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "get_purge_job", endpoint = "/api/v1/purge/{purgeJobId}",
                     method = "GET", outcome = "unauthorized", statusCode = 401)
                 return@get
             }
-            if (!call.quotaCheck(store, keyId!!)) return@get
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@get
 
             val start = System.currentTimeMillis()
             val job = store.getPurgeJob(requireNotNull(call.parameters["purgeJobId"]))
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respond(job ?: mapOf("error" to "Purge job not found"))
             call.recordAudit(store, keyId = keyId, action = "get_purge_job", endpoint = "/api/v1/purge/{purgeJobId}",
                 method = "GET", outcome = if (job != null) "success" else "not_found",
@@ -317,13 +341,16 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         post("/mcp") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@post
-            if (!authOk) {
-                call.recordAudit(store, keyId = keyId, action = "mcp", endpoint = "/mcp",
+            val authResult = call.authCheckWithKeyId()
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "mcp", endpoint = "/mcp",
                     method = "POST", outcome = "unauthorized", statusCode = 401)
                 return@post
             }
-            if (!call.quotaCheck(store, keyId!!)) return@post
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@post
 
             val start = System.currentTimeMillis()
             val request = call.receive<McpRequest>()
@@ -361,7 +388,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                 }
                 else -> McpResponse(id = request.id, error = McpError(-32601, "Method not found"))
             }
-            store.recordRequest(keyId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
             call.respondText(json.encodeToString(response), ContentType.Application.Json)
             call.recordAudit(store, keyId = keyId, action = "mcp_${request.method}", endpoint = "/mcp",
                 method = "POST", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
@@ -371,7 +398,11 @@ fun Application.chronoTraceModule(store: ChronoStore) {
 
         // GET /api/v1/admin/keys — list all keys (metadata only, no key values)
         get("/api/v1/admin/keys") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@get
+            val authResult = call.authCheckWithKeyId() ?: run {
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized", "reason" to "Authentication required"))
+                return@get
+            }
+            val (authOk, keyId) = authResult
             if (!authOk) {
                 call.recordAudit(store, keyId = keyId, action = "list_keys", endpoint = "/api/v1/admin/keys",
                     method = "GET", outcome = "unauthorized", statusCode = 401)
@@ -396,7 +427,11 @@ fun Application.chronoTraceModule(store: ChronoStore) {
 
         // POST /api/v1/admin/keys — create a new key
         post("/api/v1/admin/keys") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@post
+            val authResult = call.authCheckWithKeyId() ?: run {
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized", "reason" to "Authentication required"))
+                return@post
+            }
+            val (authOk, keyId) = authResult
             if (!authOk) {
                 call.recordAudit(store, keyId = keyId, action = "create_key", endpoint = "/api/v1/admin/keys",
                     method = "POST", outcome = "unauthorized", statusCode = 401)
@@ -430,6 +465,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             val (metadata, keyValue) = store.createKey(role = keyRole, appId = appId, quota = quota)
             // Return the metadata with keyValue (only time keyValue is ever returned)
             val response = metadata.copy(keyId = metadata.keyId.take(8) + "...") // mask in response
+            call.response.status(HttpStatusCode.Created)
             call.respondText(
                 json.encodeToString(
                     mapOf(
@@ -441,8 +477,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                         "createdAtUtc" to metadata.createdAtUtc,
                     )
                 ),
-                ContentType.Application.Json,
-                HttpStatusCode.Created,
+                contentType = ContentType.Application.Json,
             )
             call.recordAudit(store, keyId = keyId, action = "create_key", endpoint = "/api/v1/admin/keys",
                 method = "POST", outcome = "success", statusCode = 201)
@@ -523,7 +558,11 @@ fun Application.chronoTraceModule(store: ChronoStore) {
 
         // GET /api/v1/admin/audit/logs — query audit log entries
         get("/api/v1/admin/audit/logs") {
-            val (authOk, keyId) = call.authCheckWithKeyId() ?: return@get
+            val authResult = call.authCheckWithKeyId() ?: run {
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized", "reason" to "Authentication required"))
+                return@get
+            }
+            val (authOk, keyId) = authResult
             if (!authOk) {
                 call.recordAudit(store, keyId = keyId, action = "query_audit", endpoint = "/api/v1/admin/audit/logs",
                     method = "GET", outcome = "unauthorized", statusCode = 401)
@@ -686,15 +725,15 @@ private suspend fun ApplicationCall.checkBearerWithKeyId(ctx: AuthContext): Pair
 /**
  * Quota check for a request. Returns true if allowed, sends 429 and records audit if blocked.
  */
-private suspend fun ApplicationCall.quotaCheck(store: ChronoStore, keyId: String): Boolean {
+private suspend fun ApplicationCall.quotaCheck(store: ChronoStore, keyId: String?): Boolean {
     val exceeded = store.checkQuota(keyId)
     if (exceeded != null) {
         respond(
             HttpStatusCode.TooManyRequests,
             mapOf(
-                "error" to "quota_exceeded",
+                "error" to "quota exceeded",
                 "message" to "Rate limit exceeded. Retry after ${exceeded.retryAfterSeconds} seconds.",
-                "retryAfter" to exceeded.retryAfterSeconds,
+                "retryAfter" to "${exceeded.retryAfterSeconds}",
             ),
         )
         response.headers.append("Retry-After", exceeded.retryAfterSeconds.toString())

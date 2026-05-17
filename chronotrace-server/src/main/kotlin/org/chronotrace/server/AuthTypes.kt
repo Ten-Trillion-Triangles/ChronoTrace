@@ -143,6 +143,7 @@ data class AuditLogResponse(
  * @param remaining Requests remaining in the current window.
  * @param windowSeconds The quota window length.
  */
+@Serializable
 data class QuotaExceeded(
     val retryAfterSeconds: Int,
     val limit: Int,
