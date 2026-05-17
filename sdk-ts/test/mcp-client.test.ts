@@ -3,7 +3,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const SERVER_URL = process.env.MCP_SERVER_URL || 'http://127.0.0.1:18080/mcp';
-const SKIP_MCP_INTEGRATION = process.env.SKIP_MCP_INTEGRATION === 'true';
 
 /**
  * MCP Client Compatibility Test
@@ -19,8 +18,8 @@ const SKIP_MCP_INTEGRATION = process.env.SKIP_MCP_INTEGRATION === 'true';
  *   - 2025-03-26 (default negotiated)
  *   - 2024-11-05 (legacy fallback)
  *
- * To run: Start the server first with `docker compose up -d chronotrace-server`
- *         or set SKIP_MCP_INTEGRATION=true to skip these integration tests.
+ * To run with a live server: docker compose up -d chronotrace-server
+ * To skip: set SKIP_MCP_INTEGRATION=true
  */
 
 const fetch = globalThis.fetch ?? ((_url: URL | string) => Promise.reject(new Error('no fetch')));
@@ -68,46 +67,35 @@ interface CallToolResult {
 }
 
 // -------------------------------------------------------------------------
-// Dynamic describe.skip — check server reachability at test runtime inside beforeAll
+// Reachability flag — set once in beforeAll, read by every test
 // -------------------------------------------------------------------------
 
-let skipMcpTests = SKIP_MCP_INTEGRATION;
+let serverReachable = false;
+let transport: StreamableHTTPClientTransport;
+let client: Client;
 
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
-(async () => {
-    if (!SKIP_MCP_INTEGRATION) {
-        const reachable = await isServerReachable();
-        skipMcpTests = !reachable;
-    }
-})();
+// -------------------------------------------------------------------------
+// Tests — skip at runtime when server is unreachable
+// -------------------------------------------------------------------------
 
-(skipMcpTests ? describe.skip : describe)('MCP Client Compatibility', () => {
-    let transport: StreamableHTTPClientTransport;
-    let client: Client;
-
+describe('MCP Client Compatibility', () => {
     beforeAll(async () => {
-        // Re-check reachability (the IIFE above may not have finished yet)
-        if (!skipMcpTests) {
-            const reachable = await isServerReachable();
-            if (!reachable) {
-                skipMcpTests = true;
-                return;
-            }
+        if (process.env.SKIP_MCP_INTEGRATION === 'true') {
+            serverReachable = false;
+            return;
         }
+        serverReachable = await isServerReachable();
+        if (!serverReachable) return;
+
         transport = new StreamableHTTPClientTransport(new URL(SERVER_URL));
-        client = new Client({
-            name: 'chronotrace-compat-test',
-            version: '1.0.0',
-        });
-        client.onerror = (err: Error) => {
-            throw new Error(`MCP client error: ${err.message}`);
-        };
+        client = new Client({ name: 'chronotrace-compat-test', version: '1.0.0' });
+        client.onerror = (err: Error) => { throw new Error(`MCP client error: ${err.message}`); };
         await client.connect(transport);
     }, 10_000);
 
     afterAll(async () => {
         if (client) {
-            await client.close();
+            await client.close().catch(() => {/* ignore */});
         }
     });
 
@@ -117,10 +105,9 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
 
     describe('initialize', () => {
         it('should advertise server identity', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const serverInfo = client.getServerVersion();
             expect(serverInfo).toBeDefined();
-            // The server identifies itself as ChronoTrace — name is directly on the version object
             expect(serverInfo?.name ?? (serverInfo as any)?.server).toBeTruthy();
         });
     });
@@ -131,7 +118,7 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
 
     describe('tools/list', () => {
         it('should return all 11 tool descriptors', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.listTools() as ListToolsResult;
             expect(result.tools).toHaveLength(11);
             const names = result.tools.map((t: ToolDescriptor) => t.name).sort();
@@ -145,10 +132,9 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
         });
 
         it('should have valid inputSchema strings for all tools', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.listTools() as ListToolsResult;
             for (const tool of result.tools) {
-                // inputSchema is Record<string, unknown> — stringify to get the JSON representation
                 const schemaStr = JSON.stringify(tool.inputSchema);
                 expect(typeof schemaStr).toBe('string');
                 const parsed = JSON.parse(schemaStr);
@@ -157,7 +143,7 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
         });
 
         it('should have valid outputSchema strings for all tools', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.listTools() as ListToolsResult;
             for (const tool of result.tools) {
                 if (!tool.outputSchema) continue;
@@ -175,13 +161,11 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
 
     describe('tools/call: search_logs', () => {
         it('should return structured JSON with items array', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.callTool({
                 name: 'search_logs',
                 arguments: { appId: 'payments', limit: '10' },
             }) as CallToolResult;
-            // Parse the structuredContent from the text response
-            // The SDK wraps JSON-RPC results in content[]
             const textContent = result.content.find((c) => c.type === 'text') as { type: 'text'; text: string } | undefined;
             expect(textContent).toBeDefined();
             const parsed = JSON.parse(textContent!.text);
@@ -191,7 +175,7 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
         });
 
         it('should accept all documented filter arguments', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.callTool({
                 name: 'search_logs',
                 arguments: {
@@ -209,7 +193,7 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
         });
 
         it('should return empty items (not error) for unknown appId', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.callTool({
                 name: 'search_logs',
                 arguments: { appId: 'nonexistent-app-xyz', limit: '1' },
@@ -226,17 +210,14 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
 
     describe('tools/call: get_trace', () => {
         it('should return isError=true for unknown traceId', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.callTool({
                 name: 'get_trace',
                 arguments: { traceId: 'nonexistent-trace-xyz' },
             }) as CallToolResult;
             const textContent = result.content.find((c) => c.type === 'text') as { type: 'text'; text: string } | undefined;
-            const parsed = JSON.parse(textContent!.text);
-            // isError=true means the tool ran but found no data
             expect(textContent).toBeDefined();
-            // The contract says: isError=true on not-found, HTTP status stays 200
-            // The result should contain an isError indicator or empty trace
+            const parsed = JSON.parse(textContent!.text);
             expect(parsed).toBeDefined();
         });
     });
@@ -247,7 +228,7 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
 
     describe('tools/call: get_system_health', () => {
         it('should return health counters with storageMode', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.callTool({
                 name: 'get_system_health',
                 arguments: {},
@@ -268,12 +249,11 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
 
     describe('error handling', () => {
         it('should return valid error response for unknown tool', async () => {
-            if (skipMcpTests) return;
+            if (!serverReachable) return;
             const result = await client.callTool({
                 name: 'nonexistent_tool',
                 arguments: {},
             }) as CallToolResult;
-            // Unknown tool should return isError=true result (HTTP 200, JSON-RPC result with isError)
             const textContent = result.content.find((c) => c.type === 'text') as { type: 'text'; text: string } | undefined;
             expect(textContent).toBeDefined();
             const parsed = JSON.parse(textContent!.text);
@@ -281,8 +261,7 @@ let skipMcpTests = SKIP_MCP_INTEGRATION;
         });
 
         it('should return isError=true when required arg is missing', async () => {
-            if (skipMcpTests) return;
-            // get_log requires logId — calling without should return error via isError
+            if (!serverReachable) return;
             const result = await client.callTool({
                 name: 'get_log',
                 arguments: {},
