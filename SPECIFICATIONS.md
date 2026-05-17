@@ -58,7 +58,13 @@ Application developers using Kotlin (JVM/JS/Wasm) or TypeScript (Node.js/browser
 - Remote rules: CEL-like expressions pushed from server, evaluated client-side
 - Context propagation via `injectHeaders` / `extractHeaders`
 
-### Project Architecture (from module scan)
+### Documentation Requirements
+
+**API Documentation:**
+- API must have their own set of documentation files, separate from this specification.
+
+**User Manual:**
+- User manual must be implemented covering SDK usage, server configuration, and MCP integration.
 
 ```
 chronotrace-contract/
@@ -265,6 +271,13 @@ npm install @chronotrace/sdk-ts
 ## Project Rules
 
 **From AGENTS.md:** No AGENTS.md at project root — standard Kotlin/TypeScript conventions apply (ktlint, ESLint, kotlinx-serialization)
+
+**Mandatory development rules:**
+1. All features in the project must be tested, and verified working end to end.
+2. Dependencies may be installed as long as they don't require sudo.
+3. You may not modify the home folder on this system outside of the project's repo and workspace.
+4. All supported languages for traces must be fully tested and proven working.
+5. Deployment is not considered a requirement for production ready — however, Docker must work and the MCP server must be tested and proven working.
 
 **Code style:**
 - Kotlin: ktlint + detekt enforced via Gradle
