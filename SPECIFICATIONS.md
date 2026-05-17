@@ -278,6 +278,7 @@ npm install @chronotrace/sdk-ts
 3. You may not modify the home folder on this system outside of the project's repo and workspace.
 4. All supported languages for traces must be fully tested and proven working.
 5. Deployment is not considered a requirement for production ready — however, Docker must work and the MCP server must be tested and proven working.
+6. The project must be proven to do exactly what it's intended to do, fully — no stubs, mocks, or fakery. If any stubs, mocks, or fakery exist, the project is not production ready.
 
 **Code style:**
 - Kotlin: ktlint + detekt enforced via Gradle
