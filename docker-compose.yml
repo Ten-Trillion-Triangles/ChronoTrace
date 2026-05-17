@@ -18,7 +18,15 @@ services:
     ports:
       - "8123:8123"
       - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
   valkey:
     image: valkey/valkey:8.0
     ports:
       - "6379:6379"
+    volumes:
+      - valkey-data:/data
+
+volumes:
+  clickhouse-data:
+  valkey-data:

@@ -17,6 +17,10 @@ data class ClickHouseConfig(
     val ingestQueueCapacity: Int = 0,
     /** How long to wait for queue insertion before treating it as full (ms). */
     val ingestQueueTimeoutMs: Long = 5_000,
+    /** Append ?async_insert=1&wait_for_async_insert=0 to JDBC URL for lower-latency async ingest. */
+    val asyncInsert: Boolean = false,
+    /** If true, return HTTP 503 when the ingest queue is full. If false, drop events silently. */
+    val bounceOnRejected: Boolean = true,
 )
 
 data class ValkeyConfig(
@@ -40,6 +44,13 @@ data class ChronoStoreOptions(
     val valkey: ValkeyConfig? = null,
     /** Allowed API keys for apiKey auth mode (set of key values). */
     val apiKeys: Set<String> = emptySet(),
-    /** Bearer token for bearer auth mode. */
-    val bearerToken: String? = null,
+    /** Bearer tokens for bearer auth mode (comma-separated list). */
+    val bearerTokens: Set<String> = emptySet(),
+    /**
+     * Metadata for API keys and bearer tokens.
+     * Key: keyId (for apiKey mode: the key value itself; for bearer mode: "bearer:<token>").
+     * Only keys present in this map are tracked for quota and role enforcement.
+     * If a key in `apiKeys` has no entry here, it is treated as unlimited and client role.
+     */
+    val keyMetadata: Map<String, ApiKeyMetadata> = emptyMap(),
 )

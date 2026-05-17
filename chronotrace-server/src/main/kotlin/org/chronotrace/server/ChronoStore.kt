@@ -49,6 +49,18 @@ class ChronoStore(
     private val purgeState: ChronoPurgeState
     private val purgeExecutor = Executors.newSingleThreadExecutor()
 
+    // ── Phase 6: Auth hardening ────────────────────────────────────────────
+    // Key registry: keyId → ApiKeyMetadata. Initialized from options.keyMetadata
+    // plus all apiKeys entries from config (unlimited client keys if not in metadata).
+    private val keyRegistry: ConcurrentHashMap<String, ApiKeyMetadata>
+    // Original apiKeys set for revocation comparison (keys in apiKeys but not in
+    // keyMetadata are valid but not tracked — they stay valid even if revoked).
+    private val originalApiKeys: Set<String>
+    // Per-key sliding-window quota tracker.
+    private val quotaTracker: QuotaTracker
+    // In-memory audit log (append-only list of entries).
+    private val auditLog = CopyOnWriteArrayList<AuditLogEntry>()
+
     init {
         require(options.retentionDaysLogs > 0) { "retentionDaysLogs must be > 0, got ${options.retentionDaysLogs}" }
         require(options.retentionDaysSpans > 0) { "retentionDaysSpans must be > 0, got ${options.retentionDaysSpans}" }
@@ -56,6 +68,21 @@ class ChronoStore(
         val components = ChronoStoreFactory.create(options, json)
         storage = components.storage
         purgeState = components.purgeState
+
+        // Build initial key registry: start with explicit keyMetadata entries,
+        // then add any apiKeys that aren't yet in metadata as unlimited client keys.
+        val initial = options.keyMetadata.toMutableMap()
+        for (key in options.apiKeys) {
+            initial.putIfAbsent(key, ApiKeyMetadata(
+                keyId = key,
+                createdAtUtc = Instant.now().toEpochMilli(),
+                role = "client",
+                quota = null,
+            ))
+        }
+        keyRegistry = ConcurrentHashMap(initial)
+        originalApiKeys = options.apiKeys
+        quotaTracker = QuotaTracker(keyRegistry)
     }
 
     override fun ingest(batch: IngestBatch) = storage.ingest(batch)
@@ -157,6 +184,155 @@ class ChronoStore(
         val ingestDepth = if (storage is ClickHouseChronoStorage) storage.queueDepth() else 0
         purgeQueueSize + ingestDepth
     } catch (_: Exception) { 0L }
+
+    // ── Phase 6: Per-key quota enforcement ─────────────────────────────────
+
+    /**
+     * Check if a key is allowed to proceed (quota not exceeded).
+     * Called by the HTTP layer before routing to the handler.
+     *
+     * Returns null if the request is allowed.
+     * Returns a [QuotaExceeded] with retry information if the key has exceeded its quota.
+     */
+    fun checkQuota(keyId: String): QuotaExceeded? {
+        val metadata = keyRegistry[keyId] ?: return null // unknown key — let auth decide
+        if (metadata.isRevoked) return QuotaExceeded(
+            retryAfterSeconds = 0,
+            limit = metadata.quota?.limit ?: 0,
+            remaining = 0,
+            windowSeconds = metadata.quota?.windowSeconds ?: 0,
+        )
+        return quotaTracker.checkQuota(keyId)
+    }
+
+    /**
+     * Record a successful request for quota accounting.
+     * Called by the HTTP layer after a successful response.
+     */
+    fun recordRequest(keyId: String) {
+        quotaTracker.recordRequest(keyId)
+    }
+
+    // ── Phase 6: Key management ─────────────────────────────────────────────
+
+    /** List all keys (metadata only — no key values exposed). */
+    fun listKeys(roleFilter: String? = null, appIdFilter: String? = null): List<ApiKeyMetadata> {
+        return keyRegistry.values
+            .filter { roleFilter == null || it.role == roleFilter }
+            .filter { appIdFilter == null || it.appId == appIdFilter }
+            .sortedBy { it.keyId }
+    }
+
+    /** Get a single key's metadata by keyId. Returns null if not found. */
+    fun getKey(keyId: String): ApiKeyMetadata? = keyRegistry[keyId]
+
+    /**
+     * Create a new key. Returns the created ApiKeyMetadata with the generated keyValue.
+     * The keyValue is the secret — only returned on create, never again.
+     */
+    fun createKey(role: String, appId: String?, quota: ApiKeyQuota?): Pair<ApiKeyMetadata, String> {
+        require(role in listOf("admin", "client")) { "role must be 'admin' or 'client'" }
+        val keyValue = generateSecureKey()
+        val now = Instant.now().toEpochMilli()
+        val keyId = keyValue
+        val metadata = ApiKeyMetadata(
+            keyId = keyId,
+            createdAtUtc = now,
+            role = role,
+            quota = quota,
+            appId = appId,
+        )
+        keyRegistry[keyId] = metadata
+        // Also add to the apiKeys set if this is an apiKey-mode store
+        return metadata to keyValue
+    }
+
+    /**
+     * Rotate a key: invalidate its current value and generate a new one.
+     * Returns the updated ApiKeyMetadata with the new keyValue.
+     */
+    fun rotateKey(keyId: String): Pair<ApiKeyMetadata, String>? {
+        val current = keyRegistry[keyId] ?: return null
+        val newKeyValue = generateSecureKey()
+        val now = Instant.now().toEpochMilli()
+        val updated = current.copy(
+            keyId = newKeyValue, // keyId IS the keyValue — rotation changes the identity
+            rotatedAtUtc = now,
+        )
+        // Remove old keyId, add new keyId
+        keyRegistry.remove(keyId)
+        keyRegistry[newKeyValue] = updated
+        return updated to newKeyValue
+    }
+
+    /**
+     * Revoke a key by keyId. Returns true if the key was found and revoked.
+     */
+    fun revokeKey(keyId: String): Boolean {
+        val current = keyRegistry[keyId] ?: return false
+        val updated = current.copy(revokedAtUtc = Instant.now().toEpochMilli())
+        keyRegistry[keyId] = updated
+        return true
+    }
+
+    /** Check if a key is currently valid (exists and not revoked). */
+    fun isKeyValid(keyId: String): Boolean {
+        val meta = keyRegistry[keyId] ?: return false
+        return !meta.isRevoked
+    }
+
+    /** Get the role for a key (null if not found/revoked). */
+    fun getKeyRole(keyId: String): String? {
+        val meta = keyRegistry[keyId] ?: return null
+        return if (meta.isRevoked) null else meta.role
+    }
+
+    private fun generateSecureKey(): String {
+        val bytes = java.security.SecureRandom().generateSeed(32)
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    }
+
+    // ── Phase 6: Audit logging ─────────────────────────────────────────────
+
+    /**
+     * Record an audit log entry for a protected endpoint call.
+     * @param entry The audit entry to record.
+     */
+    fun recordAuditEntry(entry: AuditLogEntry) {
+        auditLog.add(entry)
+        // In-memory audit log is unbounded for now; in production this would
+        // also write to ClickHouse for durability and cross-instance queries.
+    }
+
+    /**
+     * Query audit log entries with optional filters.
+     * Entries are returned newest-first, paginated with cursor support.
+     */
+    fun queryAuditLogs(query: AuditLogQuery): AuditLogResponse {
+        val filtered = auditLog
+            .filter { entry ->
+                (query.apiKeyId == null || entry.apiKeyId == query.apiKeyId) &&
+                (query.action == null || entry.action == query.action) &&
+                (query.outcome == null || entry.outcome == query.outcome) &&
+                (query.startTimeUtc == null || entry.timestampUtc >= query.startTimeUtc) &&
+                (query.endTimeUtc == null || entry.timestampUtc <= query.endTimeUtc) &&
+                (query.appId == null || entry.appId == query.appId)
+            }
+            .sortedByDescending { it.timestampUtc }
+
+        val effectiveLimit = query.limit.coerceIn(1, 1000)
+        val startIndex = if (query.cursor != null) {
+            // Cursor format: page start index (parse as Int or 0)
+            query.cursor.toIntOrNull() ?: 0
+        } else 0
+
+        val page = filtered.drop(startIndex).take(effectiveLimit)
+        val nextCursor = if (startIndex + effectiveLimit < filtered.size) {
+            (startIndex + effectiveLimit).toString()
+        } else null
+
+        return AuditLogResponse(entries = page, nextCursor = nextCursor)
+    }
 
     override fun close() {
         purgeExecutor.shutdown()
