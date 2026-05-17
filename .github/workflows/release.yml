@@ -1,0 +1,186 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  DOCKER_AVAILABLE: "true"
+
+jobs:
+  # ─── Build & test (same as CI) ─────────────────────────────────────────────
+  build:
+    name: Build + Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build server + SDK
+        run: ./gradlew assemble --no-daemon
+
+      - name: Run all tests
+        run: ./gradlew test --no-daemon
+
+  # ─── Docker image build & publish ───────────────────────────────────────────
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/chronotrace-server
+          tags: |
+            type=semver,pattern={{version}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./chronotrace-server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ─── Docker integration tests ───────────────────────────────────────────────
+  docker-integration:
+    name: Docker integration tests
+    runs-on: ubuntu-latest
+    needs: docker
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.1
+        ports:
+          - 8123:8123
+          - 9000:9000
+        env:
+          CLICKHOUSE_DB: chronotrace
+
+      valkey:
+        image: valkey/valkey:8.0
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run server integration tests
+        env:
+          CHRONOTRACE_AUTH_MODE: none
+          CHRONOTRACE_BIND_HOST: 0.0.0.0
+          CHRONOTRACE_STORAGE_MODE: clickhouse
+          CHRONOTRACE_CLICKHOUSE_JDBC_URL: jdbc:clickhouse://localhost:8123/default
+          CHRONOTRACE_CLICKHOUSE_DATABASE: chronotrace
+          CHRONOTRACE_VALKEY_HOST: localhost
+          CHRONOTRACE_VALKEY_PORT: 6379
+        run: ./gradlew :chronotrace-server:test --no-daemon
+
+  # ─── Publish TS SDK to npm ─────────────────────────────────────────────────
+  publish-ts-sdk:
+    name: Publish TS SDK to npm
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk-ts/package-lock.json
+
+      - name: Install dependencies
+        working-directory: sdk-ts
+        run: npm ci
+
+      - name: Build
+        working-directory: sdk-ts
+        run: npm run build
+
+      - name: Publish to npm
+        working-directory: sdk-ts
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ─── Publish KMP SDK to Maven Local + upload artifact ─────────────────────
+  publish-kmp:
+    name: Publish KMP SDK to Maven Local
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Publish to Maven Local
+        run: |
+          ./gradlew publishToMavenLocal \
+            -Porg.gradle.parallel=false \
+            --no-daemon \
+            --stacktrace
+
+      - name: Upload Maven Local artifact as GHA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmp-maven-local
+          path: |
+            ~/.m2/repository/com/chronotrace/
+          retention-days: 30
+          compression-level: 6

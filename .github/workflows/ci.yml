@@ -1,0 +1,119 @@
+name: ChronoTrace CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DOCKER_AVAILABLE: "true"
+
+jobs:
+  ci:
+    name: Build, Test and Contract Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: sdk-ts/package-lock.json
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Kotlin projects
+        run: ./gradlew build -x test
+        working-directory: .
+
+      - name: Run KMP JVM tests
+        run: ./gradlew :sdk-kmp:jvmTest
+        working-directory: .
+
+      - name: Run KMP JS tests
+        run: ./gradlew :sdk-kmp:jsTest
+        working-directory: .
+
+      - name: Run KMP WasmJs tests
+        run: ./gradlew :sdk-kmp:wasmJsTest
+        working-directory: .
+
+      - name: Run KMP common tests
+        run: ./gradlew :sdk-kmp:commonTest
+        working-directory: .
+
+      - name: Run server tests
+        run: ./gradlew :chronotrace-server:test
+        working-directory: .
+
+      - name: Run contract tests
+        run: ./gradlew :chronotrace-contract:test
+        working-directory: .
+
+      - name: Install TS SDK deps
+        run: npm ci
+        working-directory: sdk-ts
+
+      - name: Build TS SDK
+        run: npm run build
+        working-directory: sdk-ts
+
+      - name: TS SDK tests
+        run: npm test
+        working-directory: sdk-ts
+
+      - name: TS SDK contract check
+        run: npm run check:contracts
+        working-directory: sdk-ts
+
+  integration-tests:
+    name: Integration Tests (Docker)
+    runs-on: ubuntu-latest
+    needs: ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Pull Docker Compose services
+        run: docker compose up -d
+        working-directory: .
+
+      - name: Wait for services to be ready
+        run: |
+          for i in $(seq 1 30); do
+            nc -z localhost 8123 && nc -z localhost 6379 && break
+            sleep 2
+          done
+
+      - name: Run integration tests
+        run: ./gradlew :chronotrace-server:test --tests "*IntegrationTest"
+        working-directory: .
+        env:
+          DOCKER_AVAILABLE: "true"
+
+      - name: Shutdown Docker Compose
+        if: always()
+        run: docker compose down
+        working-directory: .
