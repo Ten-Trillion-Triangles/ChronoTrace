@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type ChronoTransport,
   createNodeChronoTrace,
+  HttpTransport,
   type IngestBatch,
 } from "../src/index.js";
 
@@ -235,6 +236,132 @@ describe("Reconnect backoff", () => {
     await client.shutdown();
   });
 });
+
+class Http503Transport implements ChronoTransport {
+  private _connected = true;
+  private _attemptCount = 0;
+  private _failFirst: number;
+  private _delays: number[] = [];
+  private _lastAttemptTime = 0;
+
+  constructor(failFirst: number = 1) {
+    this._failFirst = failFirst;
+  }
+
+  async connect(): Promise<void> {}
+
+  async send(batch: IngestBatch): Promise<void> {
+    this._attemptCount++;
+    const now = Date.now();
+    if (this._lastAttemptTime > 0) {
+      this._delays.push(now - this._lastAttemptTime);
+    }
+    this._lastAttemptTime = now;
+
+    if (this._attemptCount <= this._failFirst) {
+      const error = new Error("Service Unavailable") as Error & { status?: number };
+      error.status = 503;
+      throw error;
+    }
+  }
+
+  async close(): Promise<void> {}
+
+  isConnected(): boolean {
+    return this._connected;
+  }
+
+  attemptCount(): number {
+    return this._attemptCount;
+  }
+
+  delays(): number[] {
+    return [...this._delays];
+  }
+
+  reset(): void {
+    this._attemptCount = 0;
+    this._delays = [];
+    this._lastAttemptTime = 0;
+  }
+}
+
+describe("HttpTransport retry", () => {
+  it("retries on 503 with exponential backoff up to 3 attempts", async () => {
+    // Patch fetch temporarily
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    let lastDelayMs = 0;
+
+    const mockFetch = async (_url: URL | Request | string, _init?: RequestInit) => {
+      callCount++;
+      if (callCount <= 3) {
+        await sleep(lastDelayMs);
+        lastDelayMs += 50; // grow delay
+        const response = {
+          ok: false,
+          status: 503,
+          statusText: "Service Unavailable",
+        } as Response;
+        const err = new Error("503") as Error & { response?: Response };
+        err.response = response;
+        throw err;
+      }
+      return new Response("{}", { status: 200 });
+    };
+
+    globalThis.fetch = mockFetch;
+
+    try {
+      const transport = new HttpTransport({ url: "http://localhost/ingest" });
+      await transport.connect();
+
+      // Should not throw — retries recover
+      await transport.send({ client: {} as any, logs: [], spans: [], frameSnapshots: [] });
+
+      // Attempt 1 (fail 503) → retry
+      // Attempt 2 (fail 503) → retry
+      // Attempt 3 (fail 503) → retry
+      // Attempt 4 (succeed)
+      // Total: 4 calls (3 retries on 503)
+      expect(callCount).toBe(4);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not retry on non-503 errors", async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+
+    const mockFetch = async () => {
+      callCount++;
+      const err = new Error("connection refused") as Error & { code?: string };
+      err.code = "ECONNREFUSED";
+      throw err;
+    };
+
+    globalThis.fetch = mockFetch;
+
+    try {
+      const transport = new HttpTransport({ url: "http://localhost/ingest" });
+      await transport.connect();
+
+      await expect(
+        transport.send({ client: {} as any, logs: [], spans: [], frameSnapshots: [] }),
+      ).rejects.toThrow("connection refused");
+
+      // Only 1 attempt — no retry on non-503
+      expect(callCount).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 describe("Crash-path flush", () => {
   it("fires fatal flush and sends buffered data on uncaughtException", async () => {
