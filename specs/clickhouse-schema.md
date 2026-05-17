@@ -51,6 +51,8 @@ TTL toDateTime(timestamp_utc / 1000) + INTERVAL {retentionDaysLogs} DAY;
 
 **Partitioning:** None (MergeTree with `ORDER BY (app_id, timestamp_utc, sequence_id)` provides the necessary scan locality).
 
+**Primary key design rationale:** `app_id` first supports efficient filtering by application — the most selective predicate in multi-tenant queries. `timestamp_utc` second supports time-range scans, the dominant read pattern. `sequence_id` resolves same-millisecond ties. This ordering is intentionally not `(timestamp_utc, app_id, sequence_id)` — ClickHouse primary keys are lexically sorted, so a time-first key would require a full table scan when filtering by `app_id` alone.
+
 **TTL:** Configurable per `ChronoStoreOptions.retentionDaysLogs` (default 30 days). ClickHouse evaluates `TTL` expressions at merge time; rows expire after the interval elapses.
 
 **Indexes:** None explicitly declared. The `ORDER BY` key provides skip-zone index behavior for range queries on `(app_id, timestamp_utc)`.
@@ -86,6 +88,8 @@ ENGINE = MergeTree()
 ORDER BY (app_id, start_time_utc, span_id)
 TTL toDateTime(start_time_utc / 1000) + INTERVAL {retentionDaysSpans} DAY;
 ```
+
+**Primary key design rationale:** `app_id` first for application-scoped queries. `start_time_utc` second for time-range scans on spans — critical for trace reconstruction and duration analysis. `span_id` third breaks ties and provides stable ordering within a timestamp.
 
 **TTL:** Configurable per `ChronoStoreOptions.retentionDaysSpans` (default 30 days).
 
