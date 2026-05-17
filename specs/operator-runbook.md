@@ -110,7 +110,75 @@ docker logs --tail 50 $(docker inspect --format='{{.State.Health.Log}}' chronotr
 
 ## Metrics Endpoints
 
-ChronoTrace does not ship a Prometheus exporter. Metrics are derived from the `/health` response and from ClickHouse system tables.
+### `/metrics` — Prometheus-compatible metrics endpoint
+
+ChronoTrace exposes a Prometheus text-format endpoint at `/metrics` (no authentication required, same as `/health`). A hand-rolled Prometheus text-format exporter is built in — no external Prometheus library dependency.
+
+```bash
+curl -s http://localhost:8080/metrics
+```
+
+Example output:
+
+```
+# HELP chronotrace_ingest_total Total ingested events
+# TYPE chronotrace_ingest_total counter
+chronotrace_ingest_total 4821
+
+# HELP chronotrace_ingest_errors_total Failed ingestion attempts
+# TYPE chronotrace_ingest_errors_total counter
+chronotrace_ingest_errors_total 3
+
+# HELP chronotrace_query_latency_seconds Ingestion-to-query latency in seconds
+# TYPE chronotrace_query_latency_seconds histogram
+chronotrace_query_latency_seconds_bucket{le="0.05"} 120
+chronotrace_query_latency_seconds_bucket{le="0.1"} 387
+chronotrace_query_latency_seconds_bucket{le="0.25"} 1203
+chronotrace_query_latency_seconds_bucket{le="0.5"} 2144
+chronotrace_query_latency_seconds_bucket{le="1.0"} 3891
+chronotrace_query_latency_seconds_bucket{le="2.5"} 4502
+chronotrace_query_latency_seconds_bucket{le="5.0"} 4711
+chronotrace_query_latency_seconds_bucket{le="10.0"} 4798
+chronotrace_query_latency_seconds_bucket{le="+Inf"} 4821
+chronotrace_query_latency_seconds_sum 1204.3
+chronotrace_query_latency_seconds_count 4821
+
+# HELP chronotrace_queue_size Number of active purge jobs (ACCEPTED + RUNNING only)
+# TYPE chronotrace_queue_size gauge
+chronotrace_queue_size 7
+
+# HELP chronotrace_dropped_events_total Events dropped due to queue overflow or errors
+# TYPE chronotrace_dropped_events_total counter
+chronotrace_dropped_events_total 12
+
+# HELP chronotrace_active_connections Current open WebSocket connections
+# TYPE chronotrace_active_connections gauge
+chronotrace_active_connections 3
+```
+
+#### Available metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `chronotrace_ingest_total` | Counter | Total events ingested via POST `/api/v1/ingest` |
+| `chronotrace_ingest_errors_total` | Counter | Ingestion requests that returned errors (4xx/5xx) |
+| `chronotrace_query_latency_seconds` | Histogram | End-to-end ingest-to-query latency in seconds; measures time from ingest POST to event being queryable |
+| `chronotrace_queue_size` | Gauge | Active purge jobs (`ACCEPTED` + `RUNNING` status); `COMPLETED`/`FAILED`/`DELETED` are terminal and excluded |
+| `chronotrace_dropped_events_total` | Counter | Events dropped server-side (e.g., during storage backpressure) |
+| `chronotrace_active_connections` | Gauge | Current open WebSocket connections to `/api/v1/ingest/ws` |
+
+Histogram buckets (seconds): `0.05`, `0.1`, `0.25`, `0.5`, `1.0`, `2.5`, `5.0`, `10.0`, `+Inf`.
+
+#### Prometheus scrape config
+
+```yaml
+scrape_configs:
+  - job_name: 'chronotrace'
+    static_configs:
+      - targets: ['chronotrace-server:8080']
+    metrics_path: /metrics
+    scrape_interval: 15s
+```
 
 ### Querying ClickHouse directly for metrics
 

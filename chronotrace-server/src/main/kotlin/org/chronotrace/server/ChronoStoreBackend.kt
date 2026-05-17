@@ -25,4 +25,6 @@ interface ChronoStoreBackend {
     fun getPurgeJob(purgeJobId: String): PurgeJob?
     fun health(): SystemHealth
     fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot>
+    /** Estimated server-side queue depth (purge jobs in pending/running state). Returns 0 for file/memory mode. */
+    fun queueSize(): Long
 }

@@ -125,6 +125,8 @@ class ChronoStore(
     override fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot> =
         storage.stepFrame(frameId, direction, count)
 
+    override fun queueSize(): Long = try { purgeState.queueSize() } catch (_: Exception) { 0L }
+
     override fun close() {
         purgeExecutor.shutdown()
         if (storage is Closeable) {
@@ -226,6 +228,10 @@ private class InMemoryChronoPurgeState : ChronoPurgeState {
     override fun listAll(): List<PurgeJob> = jobs.values.toList()
 
     override fun count(): Int = jobs.size
+
+    override fun queueSize(): Long = jobs.values.count {
+        it.status == PurgeJobStatus.ACCEPTED || it.status == PurgeJobStatus.RUNNING
+    }.toLong()
 
     override fun health(): Boolean? = true
 }
@@ -441,6 +447,10 @@ private class FileChronoPurgeState(
     override fun listAll(): List<PurgeJob> = jobs.values.toList()
 
     override fun count(): Int = jobs.size
+
+    override fun queueSize(): Long = jobs.values.count {
+        it.status == PurgeJobStatus.ACCEPTED || it.status == PurgeJobStatus.RUNNING
+    }.toLong()
 
     override fun health(): Boolean? = true
 }
@@ -936,6 +946,7 @@ private class LazyValkeyChronoPurgeState(
     override fun listAll(): List<PurgeJob> = getDelegate().listAll()
     override fun count(): Int = getDelegate().count()
     override fun health(): Boolean? = try { getDelegate().health() } catch (_: Exception) { false }
+    override fun queueSize(): Long = try { getDelegate().queueSize() } catch (_: Exception) { 0L }
     override fun close() { delegate?.close() }
 }
 
@@ -991,6 +1002,12 @@ private class ValkeyChronoPurgeState(
         } catch (_: Exception) {
             false
         }
+    }
+
+    override fun queueSize(): Long {
+        return listAll().count {
+            it.status == PurgeJobStatus.ACCEPTED || it.status == PurgeJobStatus.RUNNING
+        }.toLong()
     }
 
     override fun close() {

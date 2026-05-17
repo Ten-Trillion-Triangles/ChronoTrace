@@ -25,6 +25,10 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import java.nio.file.Paths
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
 import org.chronotrace.contract.IngestBatch
 import org.chronotrace.contract.RemoteRule
@@ -38,6 +42,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         ignoreUnknownKeys = true
     }
     val mcpTooling = McpTooling(store, json)
+    val metrics = ServerMetrics()
 
     install(ContentNegotiation) {
         json(json)
@@ -59,27 +64,64 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             call.respond(store.health())
         }
 
+        // /metrics — Prometheus scraping endpoint, no auth required
+        get("/metrics") {
+            try {
+                val queueDepth = store.queueSize()
+                metrics.setQueueSize(queueDepth)
+            } catch (_: Exception) {
+                // queue size not available (e.g. file mode) — leave as-is
+            }
+            call.respondText(metrics.toPrometheusFormat(), ContentType.Text.Plain)
+        }
+
         post("/api/v1/ingest") {
             if (!call.authCheck()) return@post
-            val batch = call.receive<IngestBatch>()
-            store.ingest(batch)
-            call.respond(mapOf("accepted" to true))
+            val start = System.currentTimeMillis()
+            metrics.recordIngest()
+            try {
+                val batch = call.receive<IngestBatch>()
+                store.ingest(batch)
+                call.respond(mapOf("accepted" to true))
+            } catch (e: Exception) {
+                metrics.recordIngestError()
+                throw e
+            }
         }
 
         webSocket("/api/v1/ingest/ws") {
-            if (!call.authCheck()) return@webSocket
-            for (frame in incoming) {
-                if (frame is Frame.Text) {
-                    val batch = json.decodeFromString(IngestBatch.serializer(), frame.readText())
-                    store.ingest(batch)
-                    send(Frame.Text("""{"accepted":true}"""))
+            metrics.connectionOpened()
+            try {
+                if (!call.authCheck()) return@webSocket
+                for (frame in incoming) {
+                    if (frame is Frame.Text) {
+                        metrics.recordIngest()
+                        try {
+                            val batch = json.decodeFromString(IngestBatch.serializer(), frame.readText())
+                            store.ingest(batch)
+                            send(Frame.Text("""{"accepted":true}"""))
+                        } catch (e: Exception) {
+                            metrics.recordIngestError()
+                            send(Frame.Text("""{"error":"${e.message}"}"""))
+                        }
+                    }
                 }
+            } finally {
+                metrics.connectionClosed()
             }
         }
 
         post("/api/v1/logs/search") {
             if (!call.authCheck()) return@post
-            call.respond(store.searchLogs(call.receive<SearchLogsRequest>()))
+            val start = System.currentTimeMillis()
+            try {
+                val response = store.searchLogs(call.receive<SearchLogsRequest>())
+                metrics.recordQueryLatency(System.currentTimeMillis() - start)
+                call.respond(response)
+            } catch (e: Exception) {
+                metrics.recordQueryLatency(System.currentTimeMillis() - start)
+                throw e
+            }
         }
 
         get("/api/v1/logs/{logId}") {
@@ -133,7 +175,16 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             val response = when (request.method) {
                 "initialize" -> McpResponse(
                     id = request.id,
-                    result = json.encodeToJsonElement(mapOf("server" to "ChronoTrace")),
+                    result = json.encodeToJsonElement(mapOf(
+                        "protocolVersion" to "2025-03-26",
+                        "capabilities" to mapOf(
+                            "tools" to emptyMap<String, String>(),
+                        ),
+                        "serverInfo" to mapOf(
+                            "name" to "ChronoTrace",
+                            "version" to "1.0.0",
+                        ),
+                    )),
                 )
 
                 "tools/list" -> McpResponse(
@@ -142,13 +193,34 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                 )
 
                 "tools/call" -> {
+                    val nameParam = request.params["name"]
+                    val name = if (nameParam is JsonPrimitive && nameParam.isString) nameParam.content else null
                     val toolRequest = ToolCallRequest(
-                        name = requireNotNull(request.params["name"]),
-                        arguments = request.params.filterKeys { it != "name" },
+                        name = requireNotNull(name) { "tools/call requires 'name' param" },
+                        arguments = request.params.filterKeys { it != "name" }
+                            .mapValues { it.value.toString() },
+                    )
+                    val toolResponse = mcpTooling.call(toolRequest)
+                    // Wrap ToolCallResponse into MCP CallToolResult format:
+                    // { content: [{ type: "text", text: <structuredContent> }], isError: <isError> }
+                    val wrappedResult = JsonObject(
+                        mapOf(
+                            "content" to JsonArray(
+                                listOf(
+                                    JsonObject(
+                                        mapOf(
+                                            "type" to JsonPrimitive("text"),
+                                            "text" to JsonPrimitive(toolResponse.structuredContent),
+                                        )
+                                    )
+                                )
+                            ),
+                            "isError" to JsonPrimitive(toolResponse.isError),
+                        )
                     )
                     McpResponse(
                         id = request.id,
-                        result = json.encodeToJsonElement(mcpTooling.call(toolRequest)),
+                        result = wrappedResult,
                     )
                 }
                 else -> McpResponse(id = request.id, error = McpError(-32601, "Method not found"))
