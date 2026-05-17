@@ -27,7 +27,7 @@ export class HttpTransport implements ChronoTransport {
       throw new Error("Fetch is not available for ChronoTrace HTTP transport");
     }
 
-    let lastError: Error;
+    let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
