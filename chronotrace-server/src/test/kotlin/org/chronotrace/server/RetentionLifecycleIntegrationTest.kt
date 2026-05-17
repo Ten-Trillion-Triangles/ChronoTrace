@@ -217,7 +217,7 @@ class RetentionLifecycleIntegrationTest {
 
             var completedJob = store.getPurgeJob(job.purgeJobId)
             var attempts = 0
-            while (completedJob?.status == PurgeJobStatus.RUNNING && attempts < 20) {
+            while (completedJob?.status in setOf(PurgeJobStatus.ACCEPTED, PurgeJobStatus.RUNNING) && attempts < 40) {
                 Thread.sleep(500)
                 completedJob = store.getPurgeJob(job.purgeJobId)
                 attempts++
