@@ -1,6 +1,6 @@
 # ChronoTrace Gap Analysis
 
-Last reviewed: 2026-03-11
+Last reviewed: 2026-05-16
 
 This document maps the original ChronoTrace spec to the current repository state.
 
@@ -160,19 +160,14 @@ Status: `Partial`
 
 ### 10. Backend Database And Ingestion Pipeline
 
-Status: `Partial`
+Status: `Implemented` (baseline production path)
 
 - Implemented:
-  - `ChronoStore` now routes through a storage/state boundary instead of a single in-memory-only implementation.
-  - The server supports `file` and `clickhouse` storage modes.
-  - A baseline ClickHouse-backed storage implementation now exists for ingest, log search, log/frame lookup, trace reconstruction, and frame stepping.
-  - A baseline Valkey-backed purge-job state implementation now exists for `clickhouse` mode.
-  - Purge in `clickhouse` mode is now asynchronous at the server level and restricted to indexed selector fields.
-- Missing:
-  - production-grade ClickHouse schema/index tuning and retention lifecycle hardening
-  - durable ingest buffering beyond the current direct-write baseline
-  - Kafka or equivalent scale-out buffering if required for final completion
-  - deeper datastore-backed integration and failure-path coverage
+  - `ChronoStore` routes through a storage/state boundary instead of a single in-memory-only implementation.
+  - Server supports `file` and `clickhouse` storage modes through `ChronoStoreOptions`, `ServerModule`, and environment-driven startup config.
+  - Baseline ClickHouse-backed storage implementation for ingest, log search, log/frame lookup, trace reconstruction, and frame stepping.
+  - Baseline Valkey-backed purge-job state implementation for `clickhouse` mode.
+  - Purge in `clickhouse` mode is asynchronous at the server level and restricted to indexed selector fields.
 - Evidence:
   - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ChronoStore.kt`
   - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ChronoStoreOptions.kt`
@@ -183,30 +178,31 @@ Status: `Partial`
 
 ### 11. MCP Tool Schemas And Outputs
 
-Status: `Partial`
+Status: `Implemented`
 
 - Implemented:
   - `/mcp` endpoint with `initialize`, `tools/list`, and `tools/call`
-  - tool descriptors and tool calls
-- Missing:
-  - final MCP transport contract
-  - real per-tool JSON schemas
-  - finalized output shapes for agent consumers
+  - All 11 tool descriptors have real JSON Schema definitions with input/output contracts, pagination behavior, and truncation rules
+  - `McpToolingTest.kt` covers schema validation and functional tool calls (27 tests)
+  - MCP protocol compatibility fix for `@modelcontextprotocol/sdk` Client.connect()
 - Evidence:
   - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ServerModule.kt`
   - `chronotrace-server/src/main/kotlin/org/chronotrace/server/McpTooling.kt`
 
 ### 12. Deployment
 
-Status: `Partial`
+Status: `Partial` (baseline production path)
 
 - Implemented:
-  - root `docker-compose.yml`
-  - server Dockerfile
+  - Root `docker-compose.yml`
+  - Server `Dockerfile`
+  - API authentication: X-Api-Key and Bearer token modes via `ServerModule`
+  - Prometheus `/metrics` endpoint via `ServerMetrics.kt`
 - Missing:
   - production-ready server configuration
   - persistent service wiring
-  - auth/TLS deployment modes
+  - auth hardening (per-key quota, audit logging, key management endpoints)
+  - TLS deployment modes
   - operator runbooks and hardening
 
 ## Gap Summary
@@ -222,43 +218,45 @@ Status: `Partial`
 - KMP compiler-plugin hidden-locals injection
 - Baseline runtime health, dropped-event accounting, and fatal-flush hooks
 - Tests/builds for current baseline
+- `file` and `clickhouse` storage modes with ClickHouse/Valkey backend
+- Valkey-backed async purge state for `clickhouse` mode
+- All 11 MCP tool schemas with real JSON Schema definitions (27 McpToolingTest tests)
+- API authentication: X-Api-Key and Bearer token modes
+- Prometheus `/metrics` endpoint
+- SDK TS publish pipeline (ESM/CJS entries, npm publish dry-run ready)
+- SDK KMP maven-publish plugin (JVM/JS/Wasm targets)
+- Load/failure path tests (SDK queue overflow, reconnect backoff, crash-path flush; server FailurePathTest, E2eIntegrationTest)
 
 ### Partial And Needs Expansion
 
-- MCP interface
-- remote rules
-- serialization
-- buffering/concurrency
-- trace propagation
-- JS/Wasm behavioral coverage
-- ClickHouse/Valkey persistence hardening
-- deployment docs
+- serialization (two-phase snapshot model not complete)
+- buffering/concurrency (production durability not complete)
+- JS/Wasm behavioral coverage (lighter than spec)
+- ClickHouse/Valkey persistence hardening (schema tuning, retention lifecycle)
+- deployment (TLS, persistent volumes, operator guidance)
 
 ### Still Missing
 
-- full AI query plane contract
-- broader TS integration packaging
-- production security model
+- Kafka or equivalent scale-out ingest buffering (if required for spec completion)
+- final protobuf or post-JSON wire contract across SDKs
+- production auth hardening (per-key quota, audit logging, key management endpoints)
 - production-grade crash-path handling guarantees
-- final release-grade acceptance matrix
+- final release-grade acceptance matrix and publish pipeline completion
 
 ## Where A New Agent Should Start
 
 - Read `08-progress-report.md` first for the current active phase and next implementation slice.
-- For the completed Phase 2 baseline, the main code entrypoints are:
-  - `sdk-ts/src/client.ts`
-  - `sdk-ts/src/capture.ts`
-  - `sdk-ts/src/instrumentation.ts`
-  - `sdk-kmp/src/commonMain/kotlin/com/chronotrace/sdk/ChronoRuntime.kt`
-  - `chronotrace-kotlin-plugin/src/main/kotlin/org/chronotrace/plugin/ChronoTraceIrGenerationExtension.kt`
-- For the active Phase 3 backend work, the main code entrypoints are:
-  - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ChronoStore.kt`
-  - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ChronoStoreOptions.kt`
-  - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ChronoStorage.kt`
-  - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ChronoPurgeState.kt`
-  - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ServerModule.kt`
-- The next active implementation target is now `04-phase-storage-query-and-ingest.md`, centered on replacing the in-memory backend with the persistent ingest/query plane.
+- Phase 5 (MCP) and Phase 5 (auth) are complete — do not revisit unless spec demands changes.
+- Phase 7 (load/failure tests) is complete.
+- The next active implementation target is Phase 3 storage hardening — ClickHouse schema tuning, retention lifecycle validation, and datastore-backed E2E tests. Phase 6 deployment and Phase 7 release gates follow storage hardening.
+- For the v0.1.0 release scope, the primary code entrypoints are:
+  - `sdk-ts/src/client.ts`, `sdk-ts/src/capture.ts`, `sdk-ts/src/instrumentation.ts` (TS SDK)
+  - `sdk-kmp/src/commonMain/kotlin/com/chronotrace/sdk/ChronoTrace.kt`, `ChronoCapture.kt`, `ChronoContextStorage.kt` (KMP SDK)
+  - `chronotrace-kotlin-plugin/src/main/kotlin/org/chronotrace/plugin/ChronoTraceIrGenerationExtension.kt` (compiler plugin)
+  - `chronotrace-server/src/main/kotlin/org/chronotrace/server/ChronoStore.kt`, `ChronoStoreOptions.kt`, `ChronoStorage.kt`, `ChronoPurgeState.kt`, `ServerModule.kt` (server/backend)
+  - `chronotrace-server/src/main/kotlin/org/chronotrace/server/McpTooling.kt` (MCP interface)
+- v0.1.0 tag (9532491) is the released baseline; all subsequent work is v0.2.0+ territory.
 
 ## Exit Criteria For This Gap Report
 
-This document is complete when every remaining requirement from the original spec is owned by exactly one later phase doc.
+This document is maintained as a historical baseline. The canonical status reference is `08-progress-report.md`.
