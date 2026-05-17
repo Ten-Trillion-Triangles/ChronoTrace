@@ -173,54 +173,44 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             if (!call.authCheck()) return@post
             val request = call.receive<McpRequest>()
             val response = when (request.method) {
-                "initialize" -> McpResponse(
-                    id = request.id,
-                    result = json.encodeToJsonElement(mapOf(
-                        "protocolVersion" to "2025-03-26",
-                        "capabilities" to mapOf(
-                            "tools" to emptyMap<String, String>(),
-                        ),
-                        "serverInfo" to mapOf(
-                            "name" to "ChronoTrace",
-                            "version" to "1.0.0",
-                        ),
-                    )),
-                )
-
-                "tools/list" -> McpResponse(
-                    id = request.id,
-                    result = json.encodeToJsonElement(mapOf("tools" to mcpTooling.descriptors())),
-                )
-
-                "tools/call" -> {
-                    val nameParam = request.params["name"]
-                    val name = if (nameParam is JsonPrimitive && nameParam.isString) nameParam.content else null
-                    val toolRequest = ToolCallRequest(
-                        name = requireNotNull(name) { "tools/call requires 'name' param" },
-                        arguments = request.params.filterKeys { it != "name" }
-                            .mapValues { it.value.toString() },
-                    )
-                    val toolResponse = mcpTooling.call(toolRequest)
-                    // Wrap ToolCallResponse into MCP CallToolResult format:
-                    // { content: [{ type: "text", text: <structuredContent> }], isError: <isError> }
-                    val wrappedResult = JsonObject(
-                        mapOf(
-                            "content" to JsonArray(
-                                listOf(
-                                    JsonObject(
-                                        mapOf(
-                                            "type" to JsonPrimitive("text"),
-                                            "text" to JsonPrimitive(toolResponse.structuredContent),
-                                        )
-                                    )
-                                )
-                            ),
-                            "isError" to JsonPrimitive(toolResponse.isError),
-                        )
-                    )
+                "initialize" -> {
+                    val initResult = """{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"ChronoTrace","version":"1.0.0"}}"""
                     McpResponse(
                         id = request.id,
-                        result = wrappedResult,
+                        result = initResult,
+                    )
+                }
+
+                "tools/list" -> {
+                    val toolsJson = json.encodeToString(mcpTooling.descriptors())
+                    val result = """{"tools":$toolsJson}"""
+                    McpResponse(
+                        id = request.id,
+                        result = result,
+                    )
+                }
+
+                "tools/call" -> {
+                    val params = request.params ?: JsonObject(emptyMap())
+                    val name = params["name"]?.toString()?.removeSurrounding("\"")
+                    val toolRequest = ToolCallRequest(
+                        name = requireNotNull(name) { "tools/call requires 'name' param" },
+                        arguments = params.entries
+                            .filter { it.key != "name" }
+                            .associate { it.key to it.value.toString().removeSurrounding("\"") },
+                    )
+                    val toolResponse = mcpTooling.call(toolRequest)
+                    val escapedText = toolResponse.structuredContent
+                        .replace("\\", "\\\\")
+                        .replace("\"", "\\\"")
+                        .replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                        .replace("\t", "\\t")
+                    val isErrorStr = if (toolResponse.isError) "true" else "false"
+                    val callResult = """{"content":[{"type":"text","text":"$escapedText"}],"isError":$isErrorStr}"""
+                    McpResponse(
+                        id = request.id,
+                        result = callResult,
                     )
                 }
                 else -> McpResponse(id = request.id, error = McpError(-32601, "Method not found"))
