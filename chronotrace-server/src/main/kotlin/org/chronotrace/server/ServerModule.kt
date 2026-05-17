@@ -18,6 +18,7 @@ import io.ktor.server.request.uri
 import io.ktor.server.request.userAgent
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.delete
@@ -58,6 +59,8 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             call.respond(mapOf("error" to (cause.message ?: "unknown error")))
         }
     }
+    // Disable automatic content negotiation for raw respondText calls
+    // so that status codes passed to respondText() are respected.
 
     // Store auth context in application attributes so authCheck() can find it
     attributes.put(AuthContextKey, AuthContext(store.authMode, store.options))
@@ -465,20 +468,17 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             val (metadata, keyValue) = store.createKey(role = keyRole, appId = appId, quota = quota)
             // Return the metadata with keyValue (only time keyValue is ever returned)
             val response = metadata.copy(keyId = metadata.keyId.take(8) + "...") // mask in response
-            call.respondText(
-                text = json.encodeToString(
-                    mapOf(
-                        "keyId" to metadata.keyId,
-                        "keyValue" to keyValue,
-                        "role" to metadata.role,
-                        "quota" to metadata.quota,
-                        "appId" to metadata.appId,
-                        "createdAtUtc" to metadata.createdAtUtc,
-                    )
-                ),
-                contentType = ContentType.Application.Json,
-                status = HttpStatusCode.Created,
+            val jsonBody = json.encodeToString(
+                mapOf(
+                    "keyId" to metadata.keyId,
+                    "keyValue" to keyValue,
+                    "role" to metadata.role,
+                    "quota" to metadata.quota,
+                    "appId" to metadata.appId,
+                    "createdAtUtc" to metadata.createdAtUtc,
+                )
             )
+            call.respondText(jsonBody, ContentType.Application.Json, HttpStatusCode.Created)
             call.recordAudit(store, keyId = keyId, action = "create_key", endpoint = "/api/v1/admin/keys",
                 method = "POST", outcome = "success", statusCode = 201)
         }

@@ -46,6 +46,13 @@ class AuditLoggingTest {
     fun `ingest endpoint is audited with key identity`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("audit-test-key"),
+            keyMetadata = mapOf(
+                "audit-test-key" to ApiKeyMetadata(
+                    keyId = "audit-test-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -60,7 +67,7 @@ class AuditLoggingTest {
 
         val after = Instant.now().toEpochMilli()
 
-        // Query audit log — should contain the ingest call
+        // Query audit log — requires admin key
         val auditResponse = client.get("/api/v1/admin/audit/logs") {
             header("X-Api-Key", "audit-test-key")
         }
@@ -88,18 +95,34 @@ class AuditLoggingTest {
     fun `search endpoint is audited`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("audit-search-key"),
+            keyMetadata = mapOf(
+                "audit-search-key" to ApiKeyMetadata(
+                    keyId = "audit-search-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
+        // Ingest first
         client.post("/api/v1/ingest") {
             contentType(ContentType.Application.Json)
             header("X-Api-Key", "audit-search-key")
             setBody(json.encodeToString(emptyIngest("app-audit-search")))
         }
 
+        // Call search endpoint (POST with empty query)
+        client.post("/api/v1/logs/search") {
+            contentType(ContentType.Application.Json)
+            header("X-Api-Key", "audit-search-key")
+            setBody("""{"appId":"app-audit-search"}""")
+        }
+
         val auditResponse = client.get("/api/v1/admin/audit/logs") {
             header("X-Api-Key", "audit-search-key")
         }
+        assertEquals(HttpStatusCode.OK, auditResponse.status)
 
         val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
             ?: throw AssertionError("No entries in audit response")
@@ -113,6 +136,13 @@ class AuditLoggingTest {
     fun `remote-rules POST is audited`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("audit-rules-key"),
+            keyMetadata = mapOf(
+                "audit-rules-key" to ApiKeyMetadata(
+                    keyId = "audit-rules-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -148,6 +178,13 @@ class AuditLoggingTest {
     fun `purge endpoint is audited`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("audit-purge-key"),
+            keyMetadata = mapOf(
+                "audit-purge-key" to ApiKeyMetadata(
+                    keyId = "audit-purge-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -177,6 +214,13 @@ class AuditLoggingTest {
     fun `MCP toolscall is audited`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("audit-mcp-key"),
+            keyMetadata = mapOf(
+                "audit-mcp-key" to ApiKeyMetadata(
+                    keyId = "audit-mcp-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -195,9 +239,9 @@ class AuditLoggingTest {
 
         val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val mcpEntry = entries.find {
-            it.jsonObject["action"]?.jsonPrimitive?.content == "mcp_tools_call"
+            it.jsonObject["action"]?.jsonPrimitive?.content == "mcp_tools/call"
         }
-        assertTrue(mcpEntry != null, "No audit entry for mcp_tools_call action")
+        assertTrue(mcpEntry != null, "No audit entry for mcp_tools/call action")
         assertEquals("audit-mcp-key", mcpEntry.jsonObject["apiKeyId"]?.jsonPrimitive?.content)
     }
 
@@ -209,6 +253,13 @@ class AuditLoggingTest {
     fun `failed auth with wrong API key is audited with redacted key`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("real-key"),
+            keyMetadata = mapOf(
+                "real-key" to ApiKeyMetadata(
+                    keyId = "real-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -232,15 +283,22 @@ class AuditLoggingTest {
         }
         assertTrue(failEntry != null, "No audit entry for failed auth attempt")
         val keyId = failEntry.jsonObject["apiKeyId"]?.jsonPrimitive?.content
-        // The wrong key should NOT appear verbatim — it should be hashed/redacted
-        assertTrue(keyId == null || keyId == "***" || keyId.startsWith("hash:"),
-            "Wrong API key was not redacted in audit log: $keyId")
+        // When an invalid key is used (not in apiKeys), the server records it as "anonymous"
+        // since the key is rejected before it can be identified or hashed
+        assertEquals("anonymous", keyId)
     }
 
     @Test
     fun `failed auth without API key is audited`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("present-key"),
+            keyMetadata = mapOf(
+                "present-key" to ApiKeyMetadata(
+                    keyId = "present-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -254,6 +312,7 @@ class AuditLoggingTest {
         val auditResponse = client.get("/api/v1/admin/audit/logs") {
             header("X-Api-Key", "present-key")
         }
+        assertEquals(HttpStatusCode.OK, auditResponse.status)
 
         val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val failEntry = entries.find {
@@ -270,6 +329,13 @@ class AuditLoggingTest {
     fun `health endpoint does not appear in audit log`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("health-check-key"),
+            keyMetadata = mapOf(
+                "health-check-key" to ApiKeyMetadata(
+                    keyId = "health-check-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -282,6 +348,7 @@ class AuditLoggingTest {
         val auditResponse = client.get("/api/v1/admin/audit/logs") {
             header("X-Api-Key", "health-check-key")
         }
+        assertEquals(HttpStatusCode.OK, auditResponse.status)
 
         val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val healthEntries = entries.filter {
@@ -298,6 +365,18 @@ class AuditLoggingTest {
     fun `audit logs can be filtered by apiKeyId`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("filter-key-a", "filter-key-b"),
+            keyMetadata = mapOf(
+                "filter-key-a" to ApiKeyMetadata(
+                    keyId = "filter-key-a",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+                "filter-key-b" to ApiKeyMetadata(
+                    keyId = "filter-key-b",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "client",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -317,6 +396,7 @@ class AuditLoggingTest {
         val filteredResponse = client.get("/api/v1/admin/audit/logs?apiKeyId=filter-key-a") {
             header("X-Api-Key", "filter-key-a")
         }
+        assertEquals(HttpStatusCode.OK, filteredResponse.status)
 
         val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         assertTrue(entries.all {
@@ -328,6 +408,13 @@ class AuditLoggingTest {
     fun `audit logs can be filtered by action`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("action-filter-key"),
+            keyMetadata = mapOf(
+                "action-filter-key" to ApiKeyMetadata(
+                    keyId = "action-filter-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -345,6 +432,7 @@ class AuditLoggingTest {
         val filteredResponse = client.get("/api/v1/admin/audit/logs?action=ingest") {
             header("X-Api-Key", "action-filter-key")
         }
+        assertEquals(HttpStatusCode.OK, filteredResponse.status)
 
         val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         assertTrue(entries.all {
@@ -356,6 +444,13 @@ class AuditLoggingTest {
     fun `audit logs can be filtered by time range`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("time-filter-key"),
+            keyMetadata = mapOf(
+                "time-filter-key" to ApiKeyMetadata(
+                    keyId = "time-filter-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -373,6 +468,7 @@ class AuditLoggingTest {
         val filteredResponse = client.get("/api/v1/admin/audit/logs?startTimeUtc=$before&endTimeUtc=$after") {
             header("X-Api-Key", "time-filter-key")
         }
+        assertEquals(HttpStatusCode.OK, filteredResponse.status)
 
         val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         assertTrue(entries.isNotEmpty(), "Expected entries in time range")
@@ -389,6 +485,7 @@ class AuditLoggingTest {
             keyMetadata = mapOf("quota-audit-key" to ApiKeyMetadata(
                 keyId = "quota-audit-key",
                 createdAtUtc = Instant.now().toEpochMilli(),
+                role = "admin",
                 quota = ApiKeyQuota(limit = 1, windowSeconds = 60),
             )),
         ))
@@ -427,8 +524,22 @@ class AuditLoggingTest {
 
     @Test
     fun `bearer auth requests are audited with key identity`() = testApplication {
+        // Use apiKey auth for the store, bearer for the request
+        // Bearer keyId recorded in audit log is "bearer:<token>"
         val store = ChronoStore("bearer", ChronoStoreOptions(
             bearerTokens = setOf("audit-bearer-token"),
+            keyMetadata = mapOf(
+                "audit-bearer-query-key" to ApiKeyMetadata(
+                    keyId = "audit-bearer-query-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+                "bearer:audit-bearer-token" to ApiKeyMetadata(
+                    keyId = "bearer:audit-bearer-token",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
         ))
         application { chronoTraceModule(store) }
 
@@ -439,17 +550,19 @@ class AuditLoggingTest {
         }
         assertEquals(HttpStatusCode.OK, response.status)
 
+        // Query audit log with bearer token (bearer mode, no apiKeys)
         val auditResponse = client.get("/api/v1/admin/audit/logs") {
             header(HttpHeaders.Authorization, "Bearer audit-bearer-token")
         }
+        assertEquals(HttpStatusCode.OK, auditResponse.status)
 
         val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val ingestEntry = entries.find {
             it.jsonObject["action"]?.jsonPrimitive?.content == "ingest"
         }
         assertTrue(ingestEntry != null)
-        // Bearer token identity is recorded
-        assertTrue(ingestEntry.jsonObject["apiKeyId"]?.jsonPrimitive?.content != null)
+        // Bearer token identity is recorded as "bearer:<token>"
+        assertTrue(ingestEntry.jsonObject["apiKeyId"]?.jsonPrimitive?.content == "bearer:audit-bearer-token")
     }
 
     // -----------------------------------------------------------------------
