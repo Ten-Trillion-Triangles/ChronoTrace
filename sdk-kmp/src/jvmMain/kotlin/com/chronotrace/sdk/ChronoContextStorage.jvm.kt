@@ -16,7 +16,7 @@ internal actual object ChronoContextStorage {
 internal actual class ChronoContextElement actual constructor(
     private val context: ChronoSpanContext?,
 ) : ThreadContextElement<ChronoSpanContext?> {
-    internal companion object Key : CoroutineContext.Key<ChronoContextElement>
+    internal actual companion object Key : CoroutineContext.Key<ChronoContextElement>
 
     override val key: CoroutineContext.Key<*> = Key
 

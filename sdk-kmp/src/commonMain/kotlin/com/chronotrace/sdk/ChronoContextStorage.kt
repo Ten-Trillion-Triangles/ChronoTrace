@@ -9,4 +9,6 @@ internal expect object ChronoContextStorage {
 
 internal expect class ChronoContextElement(
     context: ChronoSpanContext?,
-) : CoroutineContext.Element
+) : CoroutineContext.Element {
+    internal companion object Key : CoroutineContext.Key<ChronoContextElement>
+}
