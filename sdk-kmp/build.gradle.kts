@@ -32,6 +32,16 @@ kotlin {
             implementation(kotlin("test"))
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
         }
+        named("jsTest") {
+            dependencies {
+                implementation(kotlin("test-js"))
+            }
+        }
+        named("wasmJsTest") {
+            dependencies {
+                implementation(kotlin("test-wasm-js"))
+            }
+        }
     }
 }
 
