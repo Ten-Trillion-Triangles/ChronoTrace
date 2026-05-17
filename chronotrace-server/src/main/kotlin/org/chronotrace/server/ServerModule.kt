@@ -465,9 +465,8 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             val (metadata, keyValue) = store.createKey(role = keyRole, appId = appId, quota = quota)
             // Return the metadata with keyValue (only time keyValue is ever returned)
             val response = metadata.copy(keyId = metadata.keyId.take(8) + "...") // mask in response
-            call.response.status(HttpStatusCode.Created)
             call.respondText(
-                json.encodeToString(
+                text = json.encodeToString(
                     mapOf(
                         "keyId" to metadata.keyId,
                         "keyValue" to keyValue,
@@ -478,6 +477,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                     )
                 ),
                 contentType = ContentType.Application.Json,
+                status = HttpStatusCode.Created,
             )
             call.recordAudit(store, keyId = keyId, action = "create_key", endpoint = "/api/v1/admin/keys",
                 method = "POST", outcome = "success", statusCode = 201)

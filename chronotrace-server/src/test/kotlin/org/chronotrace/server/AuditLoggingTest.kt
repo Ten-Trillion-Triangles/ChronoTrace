@@ -67,7 +67,8 @@ class AuditLoggingTest {
         assertEquals(HttpStatusCode.OK, auditResponse.status)
 
         val auditJson = json.parseToJsonElement(auditResponse.bodyAsText())
-        val entries = auditJson.jsonArray
+        val entries = auditJson.jsonObject.getValue("entries").jsonArray
+            ?: throw AssertionError("No entries in audit response")
         assertTrue(entries.size >= 1, "Expected at least 1 audit entry, got ${entries.size}")
 
         val ingestEntry = entries.find {
@@ -100,7 +101,8 @@ class AuditLoggingTest {
             header("X-Api-Key", "audit-search-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
+            ?: throw AssertionError("No entries in audit response")
         val searchEntry = entries.find {
             it.jsonObject["action"]?.jsonPrimitive?.content == "search"
         }
@@ -134,7 +136,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "audit-rules-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val ruleEntry = entries.find {
             it.jsonObject["action"]?.jsonPrimitive?.content == "upsert_rule"
         }
@@ -162,7 +164,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "audit-purge-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val purgeEntry = entries.find {
             it.jsonObject["action"]?.jsonPrimitive?.content == "purge"
         }
@@ -191,7 +193,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "audit-mcp-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val mcpEntry = entries.find {
             it.jsonObject["action"]?.jsonPrimitive?.content == "mcp_tools_call"
         }
@@ -224,7 +226,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "real-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val failEntry = entries.find {
             it.jsonObject["outcome"]?.jsonPrimitive?.content == "unauthorized"
         }
@@ -253,7 +255,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "present-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val failEntry = entries.find {
             it.jsonObject["outcome"]?.jsonPrimitive?.content == "unauthorized"
         }
@@ -281,7 +283,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "health-check-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val healthEntries = entries.filter {
             it.jsonObject["endpoint"]?.jsonPrimitive?.content == "/health"
         }
@@ -316,7 +318,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "filter-key-a")
         }
 
-        val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         assertTrue(entries.all {
             it.jsonObject["apiKeyId"]?.jsonPrimitive?.content == "filter-key-a"
         }, "Filter by apiKeyId returned entries for other keys")
@@ -344,7 +346,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "action-filter-key")
         }
 
-        val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         assertTrue(entries.all {
             it.jsonObject["action"]?.jsonPrimitive?.content == "ingest"
         }, "Filter by action returned non-ingest entries")
@@ -372,7 +374,7 @@ class AuditLoggingTest {
             header("X-Api-Key", "time-filter-key")
         }
 
-        val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(filteredResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         assertTrue(entries.isNotEmpty(), "Expected entries in time range")
     }
 
@@ -410,7 +412,8 @@ class AuditLoggingTest {
             header("X-Api-Key", "quota-audit-key")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
+            ?: throw AssertionError("No entries in audit response")
         val quotaEntry = entries.find {
             it.jsonObject["outcome"]?.jsonPrimitive?.content == "quota_exceeded"
         }
@@ -440,7 +443,7 @@ class AuditLoggingTest {
             header(HttpHeaders.Authorization, "Bearer audit-bearer-token")
         }
 
-        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonArray
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
         val ingestEntry = entries.find {
             it.jsonObject["action"]?.jsonPrimitive?.content == "ingest"
         }
