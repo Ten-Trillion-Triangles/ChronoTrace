@@ -36,31 +36,24 @@ jobs:
 
       - name: Build Kotlin projects
         run: ./gradlew build -x test
-        working-directory: .
 
       - name: Run KMP JVM tests
         run: ./gradlew :sdk-kmp:jvmTest
-        working-directory: .
 
       - name: Run KMP JS tests
         run: ./gradlew :sdk-kmp:jsTest
-        working-directory: .
 
       - name: Run KMP WasmJs tests
         run: ./gradlew :sdk-kmp:wasmJsTest
-        working-directory: .
 
       - name: Run KMP common tests
         run: ./gradlew :sdk-kmp:commonTest
-        working-directory: .
 
       - name: Run server tests
         run: ./gradlew :chronotrace-server:test
-        working-directory: .
 
       - name: Run contract tests
-        run: ./gradlew :chronotrace-contract:test
-        working-directory: .
+        run: ./gradlew :chronotrace-contract:jvmTest
 
       - name: Install TS SDK deps
         run: npm ci
@@ -98,7 +91,6 @@ jobs:
 
       - name: Pull Docker Compose services
         run: docker compose up -d
-        working-directory: .
 
       - name: Wait for services to be ready
         run: |
@@ -109,11 +101,9 @@ jobs:
 
       - name: Run integration tests
         run: ./gradlew :chronotrace-server:test --tests "*IntegrationTest"
-        working-directory: .
         env:
           DOCKER_AVAILABLE: "true"
 
       - name: Shutdown Docker Compose
         if: always()
         run: docker compose down
-        working-directory: .
