@@ -10,5 +10,6 @@ internal expect object ChronoContextStorage {
 internal expect class ChronoContextElement(
     context: ChronoSpanContext?,
 ) : CoroutineContext.Element {
+    override val key: CoroutineContext.Key<*>
     internal companion object Key : CoroutineContext.Key<ChronoContextElement>
 }
