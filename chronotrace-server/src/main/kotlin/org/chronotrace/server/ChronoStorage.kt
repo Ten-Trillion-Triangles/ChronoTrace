@@ -6,6 +6,7 @@ import org.chronotrace.contract.LogRecord
 import org.chronotrace.contract.SearchLogsRequest
 import org.chronotrace.contract.SearchLogsResponse
 import org.chronotrace.contract.SpanRecord
+import org.chronotrace.contract.PurgeSelector
 import org.chronotrace.contract.TraceView
 
 interface ChronoStorage {
@@ -17,6 +18,7 @@ interface ChronoStorage {
     fun getTrace(traceId: String): TraceView
     fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot>
     fun counts(): StorageCounts
+    fun countsBySelector(selector: PurgeSelector): StorageCounts
     fun health(): StorageHealth
 }
 

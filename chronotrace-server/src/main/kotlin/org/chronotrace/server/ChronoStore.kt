@@ -126,7 +126,22 @@ class ChronoStore(
         purgeState.put(job.copy(status = PurgeJobStatus.RUNNING))
         try {
             val stats = when (storage) {
-                is ClickHouseChronoStorage -> storage.purge(job.selector)
+                is ClickHouseChronoStorage -> {
+                    // Pre-purge counts for accurate records-examined / records-deleted
+                    val beforeCounts = storage.countsBySelector(job.selector)
+                    val rawStats = storage.purge(job.selector)
+                    val afterCounts = storage.countsBySelector(job.selector)
+                    mapOf(
+                        "logsExamined" to beforeCounts.logs.toString(),
+                        "logsDeleted" to (beforeCounts.logs - afterCounts.logs).toString(),
+                        "spansExamined" to beforeCounts.spans.toString(),
+                        "spansDeleted" to (beforeCounts.spans - afterCounts.spans).toString(),
+                        "framesExamined" to beforeCounts.frames.toString(),
+                        "framesDeleted" to (beforeCounts.frames - afterCounts.frames).toString(),
+                        "mutationField" to (rawStats["mutationField"] ?: ""),
+                        "mutationValue" to (rawStats["mutationValue"] ?: ""),
+                    )
+                }
                 is FileChronoStorage -> storage.purge(job.selector)
                 is InMemoryChronoStorage -> storage.purge(job.selector)
                 else -> emptyMap()
@@ -192,6 +207,8 @@ private class InMemoryChronoPurgeState : ChronoPurgeState {
     }
 
     override fun get(purgeJobId: String): PurgeJob? = jobs[purgeJobId]
+
+    override fun listAll(): List<PurgeJob> = jobs.values.toList()
 
     override fun count(): Int = jobs.size
 
@@ -281,6 +298,14 @@ private class InMemoryChronoStorage(
 
     override fun counts(): StorageCounts = StorageCounts(logs.size, spans.size, frames.size)
 
+    override fun countsBySelector(selector: PurgeSelector): StorageCounts {
+        val predicate = buildPredicate(selector)
+        val matchingLogs = logs.count(predicate)
+        val matchingSpans = spans.count { predicate(logLike(it)) }
+        val matchingFrames = frames.count { predicate(logLike(it)) }
+        return StorageCounts(matchingLogs, matchingSpans, matchingFrames)
+    }
+
     override fun health(): StorageHealth = StorageHealth(storageMode = StorageMode.FILE, clickhouseHealthy = null, valkeyHealthy = null)
 
     private fun applyRetention() {
@@ -341,6 +366,9 @@ private class FileChronoStorage(
     override fun getTrace(traceId: String): TraceView = delegate.getTrace(traceId)
     override fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot> = delegate.stepFrame(frameId, direction, count)
     override fun counts(): StorageCounts = delegate.counts()
+
+    override fun countsBySelector(selector: PurgeSelector): StorageCounts = delegate.countsBySelector(selector)
+
     override fun health(): StorageHealth = StorageHealth(storageMode = StorageMode.FILE)
 
     fun purge(selector: PurgeSelector): Map<String, String> {
@@ -394,6 +422,8 @@ private class FileChronoPurgeState(
     }
 
     override fun get(purgeJobId: String): PurgeJob? = jobs[purgeJobId]
+
+    override fun listAll(): List<PurgeJob> = jobs.values.toList()
 
     override fun count(): Int = jobs.size
 
@@ -567,6 +597,30 @@ private class ClickHouseChronoStorage(
                 spans = countTable(connection, "spans"),
                 frames = countTable(connection, "frame_snapshots"),
             )
+        }
+    }
+
+    override fun countsBySelector(selector: PurgeSelector): StorageCounts {
+        val column = when (selector.field) {
+            "appId" -> "app_id"
+            "environment" -> "environment"
+            "traceId" -> "trace_id"
+            "spanId" -> "span_id"
+            else -> return StorageCounts(0, 0, 0)
+        }
+        connection().use { connection ->
+            return StorageCounts(
+                logs = countWhere(connection, "logs", column, selector.value),
+                spans = countWhere(connection, "spans", column, selector.value),
+                frames = countWhere(connection, "frame_snapshots", column, selector.value),
+            )
+        }
+    }
+
+    private fun countWhere(connection: Connection, table: String, column: String, value: String): Int {
+        connection.prepareStatement("SELECT count() FROM ${config.database}.$table WHERE $column = ?").use { statement ->
+            statement.setString(1, value)
+            statement.executeQuery().use { rs -> rs.next(); return rs.getInt(1) }
         }
     }
 
@@ -864,6 +918,14 @@ private class ValkeyChronoPurgeState(
     override fun get(purgeJobId: String): PurgeJob? {
         val payload = jedis.get(key(purgeJobId)) ?: return null
         return json.decodeFromString(PurgeJob.serializer(), payload)
+    }
+
+    override fun listAll(): List<PurgeJob> {
+        val ids = jedis.smembers(idsKey())
+        if (ids.isEmpty()) return emptyList()
+        return ids.mapNotNull { id ->
+            jedis.get(key(id))?.let { json.decodeFromString(PurgeJob.serializer(), it) }
+        }
     }
 
     override fun count(): Int = jedis.scard(idsKey()).toInt()
