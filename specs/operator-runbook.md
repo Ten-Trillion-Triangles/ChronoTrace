@@ -262,13 +262,19 @@ If `droppedCount` in SDK telemetry spikes, check:
 
 ## Dropped Event Accounting
 
-When the SDK drops events (queue overflow, unrecoverable error), the `droppedCount` counter is incremented. There is no server-side accounting of SDK-side drops — the operator must monitor SDK telemetry.
+When the SDK drops events (queue overflow, unrecoverable error), the `droppedCount` counter is incremented. The operator must monitor SDK telemetry — the server does **not** persist SDK-side drop counts.
 
 **If dropped events spike:**
-1. Check `CHRONOTRACE_STORAGE_MODE` — file mode with a full disk will cause drops.
-2. In clickhouse mode, check ClickHouse write latency and queue depth.
-3. If network-flavored drops, check the proxy/LB for connection errors.
-4. Consider increasing `MAX_QUEUE_SIZE` in SDK configuration at the cost of memory.
+1. Check `CHRONOTRACE_ASYNC_INSERT` and `CHRONOTRACE_BOUNCE_ON_REJECTED` settings — if the bounded write queue is bouncing with 503s, SDK clients may be retrying faster than the queue drains.
+2. Check `CHRONOTRACE_STORAGE_MODE` — file mode with a full disk will cause drops.
+3. In clickhouse mode, check ClickHouse write latency and queue depth.
+4. If network-flavored drops, check the proxy/LB for connection errors.
+5. Consider increasing the SDK `MAX_QUEUE_SIZE` at the cost of memory, or reducing ingest load at the source.
+
+**Server-side queue saturation** (bounded-queue hardening):
+- When the write queue is at capacity, the server returns HTTP 503 with a `Retry-After` header.
+- This is surfaced to SDK clients as a retryable error, not a drop — check SDK logs for `retrying after 503` messages.
+- If `CHRONOTRACE_BOUNCE_ON_REJECTED=false` (not recommended), events are dropped silently and `chronotrace_dropped_events_total` is incremented.
 
 ---
 
@@ -279,11 +285,12 @@ When the SDK drops events (queue overflow, unrecoverable error), the `droppedCou
 **Symptoms:** `clickhouseHealthy: false` in `/health`, JDBC connection exceptions in server logs.
 
 **Recovery:**
-1. Restore ClickHouse connectivity. ChronoTrace server does not queue events — clients will retry.
-2. SDK clients will retry with backoff (configurable via `MAX_RETRY_DELAY_MS`).
-3. Restart the ChronoTrace server after ClickHouse is restored to re-initialize connections.
+1. Restore ClickHouse connectivity.
+2. The bounded write queue buffers up to 10,000 events during the outage; SDK clients retry on HTTP 503 with exponential backoff — ingested events are absorbed by the queue, not dropped immediately.
+3. If the queue was at capacity during the outage, some events were dropped (SDK `droppedCount` incremented). Re-submit if loss is unacceptable.
+4. Restart the ChronoTrace server after ClickHouse is restored to re-initialize connections.
 
-**Data loss:** Events that were sent by SDK clients while ClickHouse was unavailable are **not** buffered server-side. Clients will have retried and may have dropped them (check SDK `droppedCount`).
+**Data loss:** With bounded-queue hardening, events sent during a ClickHouse outage of < 30 seconds are typically absorbed by the queue. Outages > 30 seconds may exceed queue capacity, causing SDK-side drops (check SDK `droppedCount`).
 
 ### Valkey unavailable
 
@@ -363,6 +370,8 @@ See `specs/.env.example` for the full list of environment variables.
 | `CHRONOTRACE_VALKEY_PASSWORD` | none | Valkey auth |
 | `CHRONOTRACE_VALKEY_DATABASE` | `0` | Valkey DB index |
 | `CHRONOTRACE_VALKEY_KEY_PREFIX` | `chronotrace` | Prefix for all Valkey keys |
+| `CHRONOTRACE_ASYNC_INSERT` | `false` | Set `true` to enable ClickHouse async insert mode (`async_insert=1&wait_for_async_insert=0`). Reduces ingest latency at the cost of client-side deduplication responsibility. |
+| `CHRONOTRACE_BOUNCE_ON_REJECTED` | `true` | If `true`, the ingest endpoint returns HTTP 503 when the bounded write queue is saturated, giving SDK clients a clear retry signal. |
 | `CHRONOTRACE_API_KEYS` | none | Required in `apiKey` mode |
 | `CHRONOTRACE_BEARER_TOKENS` | none | Required in `bearer` mode |
 | `CHRONOTRACE_RETENTION_LOGS_DAYS` | `30` | |
@@ -396,6 +405,64 @@ See `specs/.env.example` for the full list of environment variables.
    ```bash
    curl http://localhost:8080/health | jq '.storageMode, .clickhouseHealthy, .valkeyHealthy'
    ```
+
+---
+
+## Bounded-Queue Write Hardening
+
+The server wraps the ClickHouse write path in a bounded queue to prevent thread exhaustion when ClickHouse is slow or unavailable.
+
+### How it works
+
+```
+SDK → HTTP/WS → ChronoTraceServer → bounded coroutine queue → ClickHouse
+                                                        ↓ (at capacity)
+                                                 HTTP 503 + "queue saturated"
+```
+
+- The ingest path runs on a `CoroutineDispatcher` with a bounded queue (10,000 events).
+- When the queue is full, new submissions receive HTTP 503 with a `Retry-After` header.
+- SDK clients retry on 503 with exponential backoff, making the bounded queue effective end-to-end.
+
+### Configuration
+
+|| Variable | Default | Notes ||
+|---|---|---|---|
+| `CHRONOTRACE_BOUNCE_ON_REJECTED` | `true` | Set `false` to drop events instead of bouncing (not recommended in production) |
+| `CHRONOTRACE_ASYNC_INSERT` | `false` | Enable ClickHouse async insert mode for lower ingest latency |
+
+### Async insert mode
+
+When `CHRONOTRACE_ASYNC_INSERT=true`, the ClickHouse JDBC URL is appended with `?async_insert=1&wait_for_async_insert=0`. ClickHouse accepts inserts into an internal queue and returns immediately, reducing ingest latency at the cost of no server-side deduplication.
+
+**Trade-off**: some duplication is acceptable for telemetry. If strict deduplication is required, do not enable async insert — rely instead on the bounded queue's circuit breaker.
+
+### Backpressure chain
+
+| Component | Behavior under backpressure |
+|---|---|
+| ClickHouse slow/halted | Bounded queue absorbs up to 10,000 events; beyond that, HTTP 503 |
+| Queue at capacity | HTTP 503 with `Retry-After`; SDK retries with exponential backoff |
+| SDK internal buffer | Events buffered locally up to `MAX_QUEUE_SIZE`; then dropped (`droppedCount` incremented) |
+
+---
+
+## Kafka Deferral Decision
+
+ChronoTrace does **not** require Kafka at this stage. The bounded-queue hardening described above, combined with ClickHouse async insert mode, addresses the ingest backpressure concerns that Kafka was originally specified to solve.
+
+### When Kafka becomes required
+
+The Kafka question should be re-opened when **any one** of the following is observed in production or load testing:
+
+1. Sustained ingest rate > 5,000 events/sec for > 60 continuous seconds
+2. HTTP `/ingest` p99 latency > 500 ms under normal (non-benchmark) load
+3. Remote rule activation causes > 10x ingest volume spike exceeding the buffer capacity more than 3 times per hour
+4. ClickHouse unavailable for > 30 seconds and ingest events are lost
+5. A second ingest gateway or datacenter is added
+6. > 10 concurrent purge mutations are observed to starve ingest queries
+
+See `specs/kafka-decision.md` for the full analysis and migration path.
 
 ---
 
