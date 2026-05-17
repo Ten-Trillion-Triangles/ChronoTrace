@@ -95,7 +95,7 @@ describe("Package Integrity", () => {
       const pkg = readPackageJson();
       expect(pkg.files).toBeDefined();
       expect(Array.isArray(pkg.files)).toBe(true);
-      expect(pkg.files).toContain("dist/");
+      expect(pkg.files).toContain("dist/src/");
     });
   });
 

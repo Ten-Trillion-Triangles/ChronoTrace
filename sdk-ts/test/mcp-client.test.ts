@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const SERVER_URL = 'http://127.0.0.1:18080/mcp';
+const SERVER_URL = process.env.MCP_SERVER_URL || 'http://127.0.0.1:18080/mcp';
+const SKIP_MCP_INTEGRATION = process.env.SKIP_MCP_INTEGRATION === 'true';
 
 /**
  * MCP Client Compatibility Test
@@ -17,9 +18,26 @@ const SERVER_URL = 'http://127.0.0.1:18080/mcp';
  * Compatible protocol versions tested:
  *   - 2025-03-26 (default negotiated)
  *   - 2024-11-05 (legacy fallback)
+ *
+ * To run: Start the server first with `docker compose up -d chronotrace-server`
+ *         or set SKIP_MCP_INTEGRATION=true to skip these integration tests.
  */
 
-describe('MCP Client Compatibility', () => {
+const fetch = globalThis.fetch ?? ((_url: URL | string) => Promise.reject(new Error('no fetch')));
+
+async function isServerReachable(): Promise<boolean> {
+    try {
+        const res = await fetch(SERVER_URL, { method: 'GET', signal: AbortSignal.timeout(2000) });
+        return res.ok || res.status >= 400;
+    } catch {
+        return false;
+    }
+}
+
+// Determine skip status before the describe block (can't use await inside describe())
+const skipMcpTests = SKIP_MCP_INTEGRATION || !await isServerReachable();
+
+(skipMcpTests ? describe.skip : describe)('MCP Client Compatibility', () => {
     let transport: StreamableHTTPClientTransport;
     let client: Client;
 
