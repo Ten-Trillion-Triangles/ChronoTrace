@@ -83,6 +83,13 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                 val batch = call.receive<IngestBatch>()
                 store.ingest(batch)
                 call.respond(mapOf("accepted" to true))
+            } catch (e: IngestRejectedException) {
+                metrics.recordIngestError()
+                call.respondText(
+                    """{"error":"ingest_rejected","message":"${e.message?.replace("\"", "\\\"") ?: "circuit breaker open"}"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.ServiceUnavailable,
+                )
             } catch (e: Exception) {
                 metrics.recordIngestError()
                 throw e
