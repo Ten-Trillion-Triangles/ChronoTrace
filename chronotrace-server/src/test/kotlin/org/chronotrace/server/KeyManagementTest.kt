@@ -247,7 +247,7 @@ class KeyManagementTest {
             header("X-Api-Key", "admin-key")
             setBody("""{"role":"client","appId":"immediate-use-app"}""")
         }
-        assertEquals(HttpStatusCode.OK, createResponse.status)
+        assertEquals(HttpStatusCode.Created, createResponse.status)
         val newKeyValue = json.parseToJsonElement(createResponse.bodyAsText())
             .jsonObject["keyValue"]?.jsonPrimitive?.content
 

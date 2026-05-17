@@ -14,6 +14,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.header
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.request.userAgent
 import io.ktor.server.response.respond
@@ -34,6 +35,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
 import org.chronotrace.contract.IngestBatch
 import org.chronotrace.contract.RemoteRule
@@ -85,7 +89,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         // ── Protected endpoints (auth + quota + audit) ────────────────────
 
         post("/api/v1/ingest") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -124,7 +128,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         webSocket("/api/v1/ingest/ws") {
             metrics.connectionOpened()
             try {
-                val (authOk, keyId) = call.authCheckWithKeyId() ?: run {
+                val (authOk, keyId) = call.authCheckWithKeyId(store) ?: run {
                     call.recordAudit(store, keyId = null, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
                         method = "WS", outcome = "unauthorized", statusCode = 401)
                     return@webSocket
@@ -162,7 +166,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         post("/api/v1/logs/search") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -192,7 +196,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/logs/{logId}") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -214,7 +218,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/frames/{frameId}") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -236,7 +240,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/traces/{traceId}") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -257,7 +261,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         post("/api/v1/remote-rules") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -278,7 +282,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/remote-rules") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -298,7 +302,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         post("/api/v1/purge") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -323,7 +327,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         get("/api/v1/purge/{purgeJobId}") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -344,7 +348,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         }
 
         post("/mcp") {
-            val authResult = call.authCheckWithKeyId()
+            val authResult = call.authCheckWithKeyId(store)
             if (authResult == null) {
                 // none mode — continue without auth
             } else if (!authResult.first) {
@@ -401,7 +405,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
 
         // GET /api/v1/admin/keys — list all keys (metadata only, no key values)
         get("/api/v1/admin/keys") {
-            val authResult = call.authCheckWithKeyId() ?: run {
+            val authResult = call.authCheckWithKeyId(store) ?: run {
                 call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized", "reason" to "Authentication required"))
                 return@get
             }
@@ -423,14 +427,31 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             val roleFilter = call.request.queryParameters["role"]
             val appIdFilter = call.request.queryParameters["appId"]
             val keys = store.listKeys(roleFilter = roleFilter, appIdFilter = appIdFilter)
-            call.respond(keys)
+            val keyList = keys.map { key ->
+                buildJsonObject {
+                    put("keyId", JsonPrimitive(key.keyId))
+                    put("role", JsonPrimitive(key.role))
+                    put("createdAtUtc", JsonPrimitive(key.createdAtUtc))
+                    key.rotatedAtUtc?.let { put("rotatedAtUtc", JsonPrimitive(it)) }
+                    key.revokedAtUtc?.let { put("revokedAtUtc", JsonPrimitive(it)) }
+                    key.quota?.let { q ->
+                        put("quota", buildJsonObject {
+                            put("limit", JsonPrimitive(q.limit))
+                            put("windowSeconds", JsonPrimitive(q.windowSeconds))
+                        })
+                    }
+                    key.appId?.let { put("appId", JsonPrimitive(it)) }
+                }
+            }
+            val keysJson = JsonArray(keyList)
+            call.respondText(json.encodeToString(keysJson), ContentType.Application.Json)
             call.recordAudit(store, keyId = keyId, action = "list_keys", endpoint = "/api/v1/admin/keys",
                 method = "GET", outcome = "success", statusCode = 200)
         }
 
         // POST /api/v1/admin/keys — create a new key
         post("/api/v1/admin/keys") {
-            val authResult = call.authCheckWithKeyId() ?: run {
+            val authResult = call.authCheckWithKeyId(store) ?: run {
                 call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized", "reason" to "Authentication required"))
                 return@post
             }
@@ -448,36 +469,41 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                 return@post
             }
 
-            @Suppress("UNCHECKED_CAST")
-            val body = call.receive<Map<String, Any?>>()
-            val keyRole = (body["role"] as? String) ?: "client"
+            val rawBody = call.receiveText()
+            val bodyElement = Json.parseToJsonElement(rawBody)
+            val bodyObj = bodyElement.jsonObject
+            val keyRole = bodyObj["role"]?.jsonPrimitive?.content ?: "client"
             if (keyRole !in listOf("admin", "client")) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "bad_request", "reason" to "role must be 'admin' or 'client'"))
                 return@post
             }
 
-            val appId = body["appId"] as? String
-            val quotaMap = body["quota"] as? Map<String, Any?>
+            val appId = bodyObj["appId"]?.jsonPrimitive?.content
+            val quotaMap = bodyObj["quota"]?.jsonObject
             val quota = if (quotaMap != null) {
                 ApiKeyQuota(
-                    limit = (quotaMap["limit"] as? Number)?.toInt() ?: 0,
-                    windowSeconds = (quotaMap["windowSeconds"] as? Number)?.toInt() ?: 60,
+                    limit = quotaMap["limit"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                    windowSeconds = quotaMap["windowSeconds"]?.jsonPrimitive?.content?.toIntOrNull() ?: 60,
                 )
             } else null
 
             val (metadata, keyValue) = store.createKey(role = keyRole, appId = appId, quota = quota)
             // Return the metadata with keyValue (only time keyValue is ever returned)
-            val response = metadata.copy(keyId = metadata.keyId.take(8) + "...") // mask in response
-            val jsonBody = json.encodeToString(
-                mapOf(
-                    "keyId" to metadata.keyId,
-                    "keyValue" to keyValue,
-                    "role" to metadata.role,
-                    "quota" to metadata.quota,
-                    "appId" to metadata.appId,
-                    "createdAtUtc" to metadata.createdAtUtc,
-                )
-            )
+            val quotaJson = metadata.quota?.let { q ->
+                buildJsonObject {
+                    put("limit", JsonPrimitive(q.limit))
+                    put("windowSeconds", JsonPrimitive(q.windowSeconds))
+                }
+            }
+            val responseJson = buildJsonObject {
+                put("keyId", JsonPrimitive(metadata.keyId))
+                put("keyValue", JsonPrimitive(keyValue ?: ""))
+                put("role", JsonPrimitive(metadata.role))
+                if (quotaJson != null) put("quota", quotaJson)
+                if (metadata.appId != null) put("appId", JsonPrimitive(metadata.appId))
+                put("createdAtUtc", JsonPrimitive(metadata.createdAtUtc))
+            }
+            val jsonBody = json.encodeToString(responseJson)
             call.respondText(jsonBody, ContentType.Application.Json, HttpStatusCode.Created)
             call.recordAudit(store, keyId = keyId, action = "create_key", endpoint = "/api/v1/admin/keys",
                 method = "POST", outcome = "success", statusCode = 201)
@@ -485,7 +511,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
 
         // POST /api/v1/admin/keys/{keyId}/rotate — rotate a key
         post("/api/v1/admin/keys/{keyId}/rotate") {
-            val (authOk, requestingKeyId) = call.authCheckWithKeyId() ?: return@post
+            val (authOk, requestingKeyId) = call.authCheckWithKeyId(store) ?: return@post
             if (!authOk) {
                 call.recordAudit(store, keyId = requestingKeyId, action = "rotate_key", endpoint = "/api/v1/admin/keys/{keyId}/rotate",
                     method = "POST", outcome = "unauthorized", statusCode = 401)
@@ -507,24 +533,21 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             }
 
             val (metadata, newKeyValue) = result
-            call.respondText(
-                json.encodeToString(
-                    mapOf(
-                        "keyId" to targetKeyId,
-                        "keyValue" to newKeyValue,
-                        "rotatedAtUtc" to metadata.rotatedAtUtc,
-                    )
-                ),
-                ContentType.Application.Json,
-                HttpStatusCode.OK,
-            )
+            val rotatedAtUtcValue = metadata.rotatedAtUtc ?: System.currentTimeMillis()
+            val responseJson = buildJsonObject {
+                put("keyId", JsonPrimitive(targetKeyId))
+                put("keyValue", JsonPrimitive(newKeyValue ?: ""))
+                put("rotatedAtUtc", JsonPrimitive(rotatedAtUtcValue))
+            }
+            val jsonBody = json.encodeToString(responseJson)
+            call.respondText(jsonBody, ContentType.Application.Json, HttpStatusCode.OK)
             call.recordAudit(store, keyId = requestingKeyId, action = "rotate_key", endpoint = "/api/v1/admin/keys/{keyId}/rotate",
                 method = "POST", outcome = "success", statusCode = 200)
         }
 
         // DELETE /api/v1/admin/keys/{keyId} — revoke a key
         delete("/api/v1/admin/keys/{keyId}") {
-            val (authOk, requestingKeyId) = call.authCheckWithKeyId() ?: return@delete
+            val (authOk, requestingKeyId) = call.authCheckWithKeyId(store) ?: return@delete
             if (!authOk) {
                 call.recordAudit(store, keyId = requestingKeyId, action = "revoke_key", endpoint = "/api/v1/admin/keys/{keyId}",
                     method = "DELETE", outcome = "unauthorized", statusCode = 401)
@@ -558,7 +581,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
 
         // GET /api/v1/admin/audit/logs — query audit log entries
         get("/api/v1/admin/audit/logs") {
-            val authResult = call.authCheckWithKeyId() ?: run {
+            val authResult = call.authCheckWithKeyId(store) ?: run {
                 call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Unauthorized", "reason" to "Authentication required"))
                 return@get
             }
@@ -652,8 +675,8 @@ private data class AuthContext(
  * Note: Prefer [authCheckWithKeyId] for Phase 6 code — it returns the keyId
  * for quota and audit logging.
  */
-private suspend fun ApplicationCall.authCheck(): Boolean {
-    return authCheckWithKeyId()?.first ?: true
+private suspend fun ApplicationCall.authCheck(store: ChronoStore): Boolean {
+    return authCheckWithKeyId(store)?.first ?: true
 }
 
 /**
@@ -663,11 +686,11 @@ private suspend fun ApplicationCall.authCheck(): Boolean {
  * Returns (false, keyId) if authentication failed (401 already sent).
  * Returns (true, keyId) if authentication succeeded (keyId may be null for "none" mode).
  */
-private suspend fun ApplicationCall.authCheckWithKeyId(): Pair<Boolean, String?>? {
+private suspend fun ApplicationCall.authCheckWithKeyId(store: ChronoStore): Pair<Boolean, String?>? {
     val ctx = application.attributes.getOrNull(AuthContextKey)?.let { it as? AuthContext } ?: return null
     return when (ctx.authMode) {
         "none" -> null // null means no auth needed, continue
-        "apiKey" -> checkApiKeyWithKeyId(ctx)
+        "apiKey" -> checkApiKeyWithKeyId(ctx, store)
         "bearer" -> checkBearerWithKeyId(ctx)
         else -> null
     }
@@ -677,9 +700,9 @@ private suspend fun ApplicationCall.authCheckWithKeyId(): Pair<Boolean, String?>
  * Returns (true, keyId) if the key is valid and not revoked.
  * Returns (false, null/redactedKeyId) after sending 401.
  */
-private suspend fun ApplicationCall.checkApiKeyWithKeyId(ctx: AuthContext): Pair<Boolean, String?> {
+private suspend fun ApplicationCall.checkApiKeyWithKeyId(ctx: AuthContext, store: ChronoStore): Pair<Boolean, String?> {
     val provided = request.header("X-Api-Key")
-    if (provided == null || provided !in ctx.options.apiKeys) {
+    if (provided == null || !store.isKeyValueValid(provided)) {
         respond(
             HttpStatusCode.Unauthorized,
             mapOf("error" to "Unauthorized", "reason" to "Invalid or missing X-Api-Key"),

@@ -55,7 +55,8 @@ class ChronoStore(
     private val keyRegistry: ConcurrentHashMap<String, ApiKeyMetadata>
     // Original apiKeys set for revocation comparison (keys in apiKeys but not in
     // keyMetadata are valid but not tracked — they stay valid even if revoked).
-    private val originalApiKeys: Set<String>
+    // Also used as the mutable set of currently valid keyValues for auth checks.
+    private val originalApiKeys: MutableSet<String>
     // Per-key sliding-window quota tracker.
     private val quotaTracker: QuotaTracker
     // In-memory audit log (append-only list of entries).
@@ -81,7 +82,7 @@ class ChronoStore(
             ))
         }
         keyRegistry = ConcurrentHashMap(initial)
-        originalApiKeys = options.apiKeys
+        originalApiKeys = options.apiKeys.toMutableSet()
         quotaTracker = QuotaTracker(keyRegistry)
     }
 
@@ -197,12 +198,9 @@ class ChronoStore(
     fun checkQuota(keyId: String?): QuotaExceeded? {
         if (keyId == null) return null
         val metadata = keyRegistry[keyId] ?: return null // unknown key — let auth decide
-        if (metadata.isRevoked) return QuotaExceeded(
-            retryAfterSeconds = 0,
-            limit = metadata.quota?.limit ?: 0,
-            remaining = 0,
-            windowSeconds = metadata.quota?.windowSeconds ?: 0,
-        )
+        // Allow revoked keys through so auth check can return 401 (revocation is checked after quota).
+        // Only enforce quota if the key has a quota limit set (null quota = unlimited).
+        if (metadata.quota == null) return null
         return quotaTracker.checkQuota(keyId)
     }
 
@@ -246,7 +244,8 @@ class ChronoStore(
             appId = appId,
         )
         keyRegistry[keyId] = metadata
-        // Also add to the apiKeys set if this is an apiKey-mode store
+        // Add the new key to originalApiKeys so it's immediately usable for authentication
+        originalApiKeys.add(keyValue)
         return metadata to keyValue
     }
 
@@ -254,7 +253,7 @@ class ChronoStore(
      * Rotate a key: invalidate its current value and generate a new one.
      * Returns the updated ApiKeyMetadata with the new keyValue.
      */
-    fun rotateKey(keyId: String): Pair<ApiKeyMetadata, String>? {
+fun rotateKey(keyId: String): Pair<ApiKeyMetadata, String>? {
         val current = keyRegistry[keyId] ?: return null
         val newKeyValue = generateSecureKey()
         val now = Instant.now().toEpochMilli()
@@ -264,6 +263,15 @@ class ChronoStore(
         )
         // Update the existing keyId with new metadata (keyId stays stable across rotations)
         keyRegistry[keyId] = updated
+        // Remove the old credentials from originalApiKeys so they no longer authenticate.
+        // Both keyValue and keyId must be removed — keyId may be present as a self-lookup
+        // (when keyId == keyValue, both are the same string).
+        originalApiKeys.remove(current.keyValue ?: current.keyId)
+        if (current.keyId == current.keyValue) {
+            originalApiKeys.remove(current.keyId)
+        }
+        // Add the new keyValue so it can be used for authentication
+        originalApiKeys.add(newKeyValue)
         return updated to newKeyValue
     }
 
@@ -281,6 +289,28 @@ class ChronoStore(
     fun isKeyValid(keyId: String): Boolean {
         val meta = keyRegistry[keyId] ?: return false
         return !meta.isRevoked
+    }
+
+    /** Check if a keyValue is valid for authentication (not revoked).
+     * Uses originalApiKeys (mutable set that tracks all valid keyValues including rotated ones)
+     * to allow newly created/rotated keys to work for auth immediately.
+     */
+    fun isKeyValueValid(keyValue: String): Boolean {
+        // First check: keyValue must be in originalApiKeys (the mutable valid key set)
+        if (keyValue !in originalApiKeys) return false
+        // Second check: if it's in keyRegistry, it must not be revoked
+        val meta = keyRegistry[keyValue]
+        return meta == null || !meta.isRevoked
+    }
+
+    /** Remove a keyValue from the valid auth set (used after rotation to invalidate old credentials). */
+    fun removeKeyValueFromAuth(keyValue: String) {
+        originalApiKeys.remove(keyValue)
+    }
+
+    /** Add a new keyValue to the valid auth set (used after create/rotate). */
+    fun addKeyValueToAuth(keyValue: String) {
+        originalApiKeys.add(keyValue)
     }
 
     /** Get the role for a key (null if not found/revoked). */
