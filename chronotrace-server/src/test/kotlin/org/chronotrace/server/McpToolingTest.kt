@@ -14,7 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.chronotrace.contract.ToolCallRequest
 
 class McpToolingTest {
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private val tooling = McpTooling(ChronoStore("none"), json)
 
     // ---------------------------------------------------------------------------

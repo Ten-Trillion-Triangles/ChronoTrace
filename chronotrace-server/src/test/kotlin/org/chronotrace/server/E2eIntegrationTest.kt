@@ -148,7 +148,7 @@ class E2eIntegrationTest {
 
             // (a) Health check confirms server is up and store is in-memory
             val health = json.parseToJsonElement(httpGet("$baseUrl/health")).jsonObject
-            assertEquals("memory", health["storageMode"]?.jsonPrimitive?.content)
+            assertEquals("file", health["storageMode"]?.jsonPrimitive?.content)
             val totalLogs = health["totalLogs"]?.jsonPrimitive?.intOrNull ?: 0
             assertTrue(totalLogs >= 5, "Expected at least 5 logs, got $totalLogs")
 

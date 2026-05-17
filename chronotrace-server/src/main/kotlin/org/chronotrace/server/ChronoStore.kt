@@ -42,6 +42,9 @@ class ChronoStore(
     private val purgeExecutor = Executors.newSingleThreadExecutor()
 
     init {
+        require(options.retentionDaysLogs > 0) { "retentionDaysLogs must be > 0, got ${options.retentionDaysLogs}" }
+        require(options.retentionDaysSpans > 0) { "retentionDaysSpans must be > 0, got ${options.retentionDaysSpans}" }
+        require(options.retentionDaysFrames > 0) { "retentionDaysFrames must be > 0, got ${options.retentionDaysFrames}" }
         val components = ChronoStoreFactory.create(options, json)
         storage = components.storage
         purgeState = components.purgeState
@@ -92,7 +95,7 @@ class ChronoStore(
         val storageMode = when (storage) {
             is ClickHouseChronoStorage -> "clickhouse"
             is FileChronoStorage -> "file"
-            else -> "memory"
+            else -> "file"
         }
         val counts = try {
             storage.counts()

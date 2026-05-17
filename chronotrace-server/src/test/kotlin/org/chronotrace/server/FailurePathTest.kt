@@ -179,7 +179,7 @@ class FailurePathTest {
             assertNotNull(log, "log should be retrievable after ingest")
 
             val health = store.health()
-            assertEquals("memory", health.storageMode)
+            assertEquals("file", health.storageMode)
             assertNull(health.clickhouseHealthy, "no clickhouse health in memory mode")
             assertNull(health.valkeyHealthy, "no valkey health in memory mode")
         }

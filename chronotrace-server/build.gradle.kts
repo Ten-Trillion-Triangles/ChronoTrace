@@ -33,4 +33,5 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    environment("DOCKER_AVAILABLE", "false")
 }

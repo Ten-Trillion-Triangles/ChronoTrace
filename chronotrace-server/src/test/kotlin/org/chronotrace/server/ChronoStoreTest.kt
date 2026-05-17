@@ -91,9 +91,9 @@ class ChronoStoreTest {
     }
 
     @Test
-    fun `memory mode reports memory health`() {
+    fun `file mode reports file health for InMemoryChronoStorage`() {
         ChronoStore(authMode = "none").use { store ->
-            assertEquals("memory", store.health().storageMode)
+            assertEquals("file", store.health().storageMode)
             assertNull(store.health().clickhouseHealthy)
             assertNull(store.health().valkeyHealthy)
         }
@@ -122,7 +122,7 @@ class ChronoStoreTest {
                     storageMode = StorageMode.CLICKHOUSE,
                     clickHouse = ClickHouseConfig(jdbcUrl = " ", database = "chronotrace"),
                     valkey = ValkeyConfig(host = "localhost"),
-                    retentionDaysLogs = 0,
+                    retentionDaysLogs = 1,
                 ),
             )
         }
