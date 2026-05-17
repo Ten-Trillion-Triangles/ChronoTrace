@@ -66,7 +66,10 @@ tasks.withType(KotlinCompilationTask::class.java).configureEach {
     dependsOn(chronoTraceCompilerPluginJar)
     compilerOptions.freeCompilerArgs.addAll(
         project.provider {
-            listOf("-Xplugin=${chronoTraceCompilerPluginJar.get().archiveFile.get().asFile.absolutePath}")
+            listOf(
+                "-Xplugin=${chronoTraceCompilerPluginJar.get().archiveFile.get().asFile.absolutePath}",
+                "-Xexpect-actual-classes",
+            )
         },
     )
 }
