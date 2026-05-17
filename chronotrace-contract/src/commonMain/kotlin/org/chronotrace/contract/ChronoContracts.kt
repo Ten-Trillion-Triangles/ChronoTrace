@@ -107,6 +107,8 @@ data class LogRecord(
     val fields: Map<String, String> = emptyMap(),
     val captureReason: CaptureReason? = null,
     val linkedFrameId: String? = null,
+    /** The ruleId of the RemoteRule that triggered this log's capture (null for non-rule captures). */
+    val triggeredRuleId: String? = null,
 )
 
 @Serializable
@@ -153,7 +155,39 @@ data class RemoteRule(
     val captureMode: CaptureReason = CaptureReason.REMOTE_RULE,
     val sampleLimit: Int = 1,
     val createdBy: String,
+    /** UTC epoch millis — set on insert from system clock. */
+    val createdAtUtc: Long? = null,
+    /** UTC epoch millis — set when rule expires or is deleted. */
+    val expiresAtUtc: Long? = null,
 )
+
+/**
+ * Tracks delivery confirmation for a RemoteRule that was evaluated server-side.
+ * The server creates one of these each time a rule is evaluated against an ingest batch,
+ * then updates it to CONFIRMED or FAILED when the SDK acks or times out.
+ */
+@Serializable
+data class RuleDeliveryConfirmation(
+    val deliveryId: String,
+    val ruleId: String,
+    val appId: String,
+    val environment: String,
+    /** UTC epoch millis when the rule was triggered. */
+    val triggeredAtUtc: Long,
+    /** Whether the SDK has confirmed receipt of the triggered rule. */
+    val status: RuleDeliveryStatus,
+    /** UTC epoch millis — set when SDK acks or when delivery times out. */
+    val confirmedAtUtc: Long? = null,
+    /** Optional error message if delivery failed. */
+    val errorMessage: String? = null,
+)
+
+@Serializable
+enum class RuleDeliveryStatus {
+    PENDING,
+    CONFIRMED,
+    FAILED,
+}
 
 @Serializable
 data class PurgeSelector(

@@ -1,6 +1,6 @@
 # ChronoTrace Progress Report
 
-Last reviewed: 2026-05-16
+Last reviewed: 2026-05-16 (Evening)
 
 ## Purpose
 
@@ -30,6 +30,7 @@ ChronoTrace is now a validated Phase 1 plus Phase 2 baseline with the first real
 - The server now supports explicit `file` and `clickhouse` storage modes through `ChronoStoreOptions`, `ServerModule`, and environment-driven startup config.
 - A baseline ClickHouse-backed storage implementation now exists for ingest, search, lookup, trace reconstruction, and frame stepping.
 - A baseline Valkey-backed purge-state implementation now exists for async purge-job tracking in `clickhouse` mode.
+- RemoteRule persistence and delivery-confirmation tracking now landed: `LogRecord.triggeredRuleId`, `RemoteRule.createdAtUtc`/`expiresAtUtc`, `RuleDeliveryConfirmation` data class, `RuleDeliveryStatus` enum (PENDING/CONFIRMED/FAILED), ClickHouse `remote_rules` and `rule_delivery_log` tables, DB-backed `listRuleDeliveryConfirmations`/`ackRuleDelivery` in `ChronoStore`, MCP schemas updated (`triggeredRuleId` in search output, `createdAtUtc`/`expiresAtUtc` in list_remote_rules output), McpToolingTest coverage added.
 
 ### Shared Contracts
 
@@ -76,7 +77,7 @@ ChronoTrace is now a validated Phase 1 plus Phase 2 baseline with the first real
 ## Partially Completed
 
 - MCP support is complete — all 11 tools have real JSON schemas with input/output contracts, pagination behavior, and truncation rules. McpToolingTest.kt covers schema validation and functional tool calls.
-- Remote rules exist, but the end-to-end server delivery, persistence, and full original-spec rule model are not complete.
+- Remote rules exist with full persistence, delivery-confirmation tracking, and ClickHouse-backed storage (see above).
 - Serialization/redaction now exists as a shared runtime capture path, but the final two-phase snapshot model and full object-parity across runtimes are not complete.
 - Buffering and resilience now include explicit runtime state and fatal-flush hooks at baseline level, but the full production durability story is not complete.
 - Deployment scaffolding exists through Docker files and compose setup, but the production deployment profile is not complete.

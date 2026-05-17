@@ -13,6 +13,10 @@ data class ClickHouseConfig(
     val username: String? = null,
     val password: String? = null,
     val connectTimeoutMs: Int = 5_000,
+    /** Size of the bounded ingest queue. 0 = disabled (sync writes). */
+    val ingestQueueCapacity: Int = 0,
+    /** How long to wait for queue insertion before treating it as full (ms). */
+    val ingestQueueTimeoutMs: Long = 5_000,
 )
 
 data class ValkeyConfig(

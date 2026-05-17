@@ -55,7 +55,8 @@ class McpTooling(
           "message": { "type": "string" },
           "fields": { "type": "object", "additionalProperties": { "type": "string" } },
           "captureReason": { "type": ["string", "null"], "enum": ["manual_trace", "auto_capture_level", "remote_rule", "crash_flush"] },
-          "linkedFrameId": { "type": ["string", "null"] }
+          "linkedFrameId": { "type": ["string", "null"] },
+          "triggeredRuleId": { "type": ["string", "null"], "description": "The ruleId of the RemoteRule that triggered this log's capture. null for non-rule captures." }
         },
         "required": ["logId", "appId", "environment", "sdkInstanceId", "serviceName", "timestampUtc", "sequenceId", "level", "message"]
       }
@@ -93,7 +94,8 @@ class McpTooling(
     "message": { "type": "string" },
     "fields": { "type": "object", "additionalProperties": { "type": "string" } },
     "captureReason": { "type": ["string", "null"] },
-    "linkedFrameId": { "type": ["string", "null"] }
+    "linkedFrameId": { "type": ["string", "null"] },
+    "triggeredRuleId": { "type": ["string", "null"], "description": "The ruleId of the RemoteRule that triggered this log's capture. null for non-rule captures." }
   },
   "required": ["logId", "appId", "environment", "sdkInstanceId", "serviceName", "timestampUtc", "sequenceId", "level", "message"],
   "description": "A single LogRecord, or null if not found"
@@ -304,7 +306,9 @@ class McpTooling(
       "expression": { "type": "string", "description": "CEL expression evaluated against each log" },
       "captureMode": { "type": "string", "enum": ["manual_trace", "auto_capture_level", "remote_rule", "crash_flush"] },
       "sampleLimit": { "type": "integer", "description": "Max logs to capture per rule evaluation (default 1)" },
-      "createdBy": { "type": "string" }
+      "createdBy": { "type": "string" },
+      "createdAtUtc": { "type": ["integer", "null"], "description": "UTC epoch millis — set on insert from system clock" },
+      "expiresAtUtc": { "type": ["integer", "null"], "description": "UTC epoch millis — set when rule expires or is deleted" }
     },
     "required": ["ruleId", "enabled", "ttlSeconds", "priority", "expression", "captureMode", "sampleLimit", "createdBy"]
   }

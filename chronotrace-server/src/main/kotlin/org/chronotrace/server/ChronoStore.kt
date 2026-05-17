@@ -9,6 +9,9 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -24,12 +27,17 @@ import org.chronotrace.contract.PurgeJob
 import org.chronotrace.contract.PurgeJobStatus
 import org.chronotrace.contract.PurgeSelector
 import org.chronotrace.contract.RemoteRule
+import org.chronotrace.contract.RuleDeliveryConfirmation
+import org.chronotrace.contract.RuleDeliveryStatus
 import org.chronotrace.contract.SearchLogsRequest
 import org.chronotrace.contract.SearchLogsResponse
 import org.chronotrace.contract.SpanRecord
 import org.chronotrace.contract.SystemHealth
 import org.chronotrace.contract.TraceView
 import redis.clients.jedis.JedisPooled
+
+/** Thrown when the bounded ingest queue is full and the circuit breaker is open. */
+class IngestRejectedException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 class ChronoStore(
     val authMode: String,
@@ -51,6 +59,22 @@ class ChronoStore(
     }
 
     override fun ingest(batch: IngestBatch) = storage.ingest(batch)
+
+    /**
+     * Attempts to offer a batch to the ingest queue.
+     * - Returns normally if the batch was queued or executed synchronously.
+     * - Throws [IngestRejectedException] when the bounded queue is full (circuit breaker open).
+     *   The HTTP layer catches this and returns 503.
+     * - Falls back to synchronous ingest when no queue is configured.
+     */
+    fun tryOfferBatch(batch: IngestBatch): Unit {
+        val storage0 = storage
+        if (storage0 is ClickHouseChronoStorage) {
+            storage0.tryOfferBatch(batch)
+        } else {
+            ingest(batch)
+        }
+    }
 
     override fun searchLogs(request: SearchLogsRequest): SearchLogsResponse = storage.searchLogs(request)
 
@@ -128,7 +152,11 @@ class ChronoStore(
     override fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot> =
         storage.stepFrame(frameId, direction, count)
 
-    override fun queueSize(): Long = try { purgeState.queueSize() } catch (_: Exception) { 0L }
+    override fun queueSize(): Long = try {
+        val purgeQueueSize = purgeState.queueSize()
+        val ingestDepth = if (storage is ClickHouseChronoStorage) storage.queueDepth() else 0
+        purgeQueueSize + ingestDepth
+    } catch (_: Exception) { 0L }
 
     override fun close() {
         purgeExecutor.shutdown()
@@ -458,7 +486,7 @@ private class FileChronoPurgeState(
     override fun health(): Boolean? = true
 }
 
-private class ClickHouseChronoStorage(
+internal class ClickHouseChronoStorage(
     private val config: ClickHouseConfig,
     private val options: ChronoStoreOptions,
     private val json: Json,
@@ -467,11 +495,58 @@ private class ClickHouseChronoStorage(
         val SUPPORTED_PURGE_FIELDS = setOf("appId", "environment", "traceId", "spanId")
     }
 
+    // ── Bounded queue + circuit breaker ────────────────────────────────────
+    private val useQueue = config.ingestQueueCapacity > 0
+    private val ingestQueue: LinkedBlockingQueue<Runnable>? = if (useQueue) {
+        LinkedBlockingQueue<Runnable>(config.ingestQueueCapacity)
+    } else null
+    private val executor: ThreadPoolExecutor? = if (useQueue) {
+        ThreadPoolExecutor(
+            1, 1,
+            60L, TimeUnit.SECONDS,
+            ingestQueue!!,
+            Executors.defaultThreadFactory(),
+        ) { r, exec ->
+            throw RejectedExecutionException("Ingest queue full (${config.ingestQueueCapacity} batches), circuit breaker open")
+        }.also { it.prestartAllCoreThreads() }
+    } else null
+
     init {
         bootstrap()
     }
 
+    /**
+     * Attempts to offer a batch to the bounded ingest queue.
+     * - Returns normally if the batch was queued or executed synchronously.
+     * - Throws [IngestRejectedException] when the queue is full (circuit breaker open).
+     *   The HTTP layer catches this and returns 503.
+     */
+    fun tryOfferBatch(batch: IngestBatch): Unit {
+        if (!useQueue) {
+            doIngestSync(batch)
+            return
+        }
+        val offered = ingestQueue!!.offer(Runnable { doIngestSync(batch) }, config.ingestQueueTimeoutMs, TimeUnit.MILLISECONDS)
+        if (!offered) {
+            throw IngestRejectedException(
+                "Ingest queue full (capacity=${config.ingestQueueCapacity}, timeout=${config.ingestQueueTimeoutMs}ms). " +
+                    "ClickHouse is slow or backpressured. Retry after a short delay.",
+            )
+        }
+    }
+
+    /** Current number of batches in the bounded queue. Used by /metrics. */
+    fun queueDepth(): Int = ingestQueue?.size ?: 0
+
     override fun ingest(batch: IngestBatch) {
+        if (useQueue) {
+            tryOfferBatch(batch)
+        } else {
+            doIngestSync(batch)
+        }
+    }
+
+    private fun doIngestSync(batch: IngestBatch) {
         connection().use { connection ->
             connection.autoCommit = false
             insertLogs(connection, batch.logs)
@@ -479,6 +554,11 @@ private class ClickHouseChronoStorage(
             insertFrames(connection, batch.frameSnapshots)
             connection.commit()
         }
+    }
+
+    override fun close() {
+        executor?.shutdown()
+        executor?.awaitTermination(5, TimeUnit.SECONDS)
     }
 
     override fun searchLogs(request: SearchLogsRequest): SearchLogsResponse {
@@ -663,8 +743,6 @@ override fun health(): StorageHealth {
             StorageHealth(storageMode = StorageMode.CLICKHOUSE, clickhouseHealthy = false)
         }
     }
-
-    override fun close() = Unit
 
     private fun bootstrap() {
         try {
