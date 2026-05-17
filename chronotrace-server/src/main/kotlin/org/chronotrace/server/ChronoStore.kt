@@ -89,12 +89,25 @@ class ChronoStore(
     override fun getPurgeJob(purgeJobId: String): PurgeJob? = purgeState.get(purgeJobId)
 
     override fun health(): SystemHealth {
-        val counts = storage.counts()
-        val health = storage.health()
         val storageMode = when (storage) {
             is ClickHouseChronoStorage -> "clickhouse"
             is FileChronoStorage -> "file"
             else -> "memory"
+        }
+        val counts = try {
+            storage.counts()
+        } catch (_: Exception) {
+            StorageCounts(0, 0, 0)
+        }
+        val chHealth = try {
+            if (storage is ClickHouseChronoStorage) storage.health().clickhouseHealthy else null
+        } catch (_: Exception) {
+            false
+        }
+        val valkeyHealth = try {
+            if (storage is ClickHouseChronoStorage) purgeState.health() else null
+        } catch (_: Exception) {
+            null
         }
         return SystemHealth(
             authMode = authMode,
@@ -102,10 +115,10 @@ class ChronoStore(
             totalSpans = counts.spans,
             totalFrames = counts.frames,
             totalRules = rules.size,
-            totalPurgeJobs = purgeState.count(),
+            totalPurgeJobs = try { purgeState.count() } catch (_: Exception) { 0 },
             storageMode = storageMode,
-            clickhouseHealthy = if (storage is ClickHouseChronoStorage) health.clickhouseHealthy else null,
-            valkeyHealthy = if (storage is ClickHouseChronoStorage) health.valkeyHealthy ?: purgeState.health() else null,
+            clickhouseHealthy = chHealth,
+            valkeyHealthy = valkeyHealth,
         )
     }
 
@@ -187,7 +200,9 @@ private object ChronoStoreFactory {
                 val valkey = requireNotNull(options.valkey) { "clickhouse mode requires Valkey config" }
                 validateClickHouseConfig(clickHouse, valkey, options)
                 val storage = ClickHouseChronoStorage(clickHouse, options, json)
-                val purgeState = ValkeyChronoPurgeState(valkey, json)
+                // Lazily initialize ValkeyChronoPurgeState so that Valkey unavailability
+                // does not prevent the store from being constructed or used for ingest.
+                val purgeState = LazyValkeyChronoPurgeState(valkey, json)
                 StoreComponents(storage = storage, purgeState = purgeState)
             }
         }
@@ -623,8 +638,7 @@ private class ClickHouseChronoStorage(
             statement.executeQuery().use { rs -> rs.next(); return rs.getInt(1) }
         }
     }
-
-    override fun health(): StorageHealth {
+override fun health(): StorageHealth {
         return try {
             connection().use { connection ->
                 connection.prepareStatement("SELECT 1").use { statement ->
@@ -640,77 +654,82 @@ private class ClickHouseChronoStorage(
     override fun close() = Unit
 
     private fun bootstrap() {
-        connection().use { connection ->
-            connection.createStatement().use { statement ->
-                statement.execute("CREATE DATABASE IF NOT EXISTS ${config.database}")
-                statement.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ${config.database}.logs (
-                        log_id String,
-                        app_id String,
-                        environment String,
-                        sdk_instance_id String,
-                        service_name String,
-                        trace_id Nullable(String),
-                        span_id Nullable(String),
-                        parent_span_id Nullable(String),
-                        timestamp_utc Int64,
-                        sequence_id Int64,
-                        level String,
-                        message String,
-                        fields_json String,
-                        capture_reason Nullable(String),
-                        linked_frame_id Nullable(String)
+        try {
+            connection().use { connection ->
+                connection.createStatement().use { statement ->
+                    statement.execute("CREATE DATABASE IF NOT EXISTS ${config.database}")
+                    statement.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ${config.database}.logs (
+                            log_id String,
+                            app_id String,
+                            environment String,
+                            sdk_instance_id String,
+                            service_name String,
+                            trace_id Nullable(String),
+                            span_id Nullable(String),
+                            parent_span_id Nullable(String),
+                            timestamp_utc Int64,
+                            sequence_id Int64,
+                            level String,
+                            message String,
+                            fields_json String,
+                            capture_reason Nullable(String),
+                            linked_frame_id Nullable(String)
+                        )
+                        ENGINE = MergeTree()
+                        ORDER BY (app_id, timestamp_utc, sequence_id)
+                        TTL toDateTime(timestamp_utc / 1000) + INTERVAL ${options.retentionDaysLogs} DAY
+                        """.trimIndent(),
                     )
-                    ENGINE = MergeTree()
-                    ORDER BY (app_id, timestamp_utc, sequence_id)
-                    TTL toDateTime(timestamp_utc / 1000) + INTERVAL ${options.retentionDaysLogs} DAY
-                    """.trimIndent(),
-                )
-                statement.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ${config.database}.spans (
-                        span_id String,
-                        trace_id String,
-                        app_id String,
-                        environment String,
-                        service_name String,
-                        operation_name String,
-                        parent_span_id Nullable(String),
-                        start_time_utc Int64,
-                        end_time_utc Nullable(Int64),
-                        status String,
-                        attributes_json String
+                    statement.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ${config.database}.spans (
+                            span_id String,
+                            trace_id String,
+                            app_id String,
+                            environment String,
+                            service_name String,
+                            operation_name String,
+                            parent_span_id Nullable(String),
+                            start_time_utc Int64,
+                            end_time_utc Nullable(Int64),
+                            status String,
+                            attributes_json String
+                        )
+                        ENGINE = MergeTree()
+                        ORDER BY (app_id, start_time_utc, span_id)
+                        TTL toDateTime(start_time_utc / 1000) + INTERVAL ${options.retentionDaysSpans} DAY
+                        """.trimIndent(),
                     )
-                    ENGINE = MergeTree()
-                    ORDER BY (app_id, start_time_utc, span_id)
-                    TTL toDateTime(start_time_utc / 1000) + INTERVAL ${options.retentionDaysSpans} DAY
-                    """.trimIndent(),
-                )
-                statement.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS ${config.database}.frame_snapshots (
-                        frame_id String,
-                        trace_id String,
-                        span_id String,
-                        app_id String,
-                        environment String,
-                        sdk_instance_id String,
-                        service_name String,
-                        timestamp_utc Int64,
-                        sequence_id Int64,
-                        capture_reason String,
-                        call_stack_json String,
-                        locals_json String,
-                        serialization_metadata_json String,
-                        log_id Nullable(String)
+                    statement.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ${config.database}.frame_snapshots (
+                            frame_id String,
+                            trace_id String,
+                            span_id String,
+                            app_id String,
+                            environment String,
+                            sdk_instance_id String,
+                            service_name String,
+                            timestamp_utc Int64,
+                            sequence_id Int64,
+                            capture_reason Nullable(String),
+                            call_stack_json String,
+                            locals_json String,
+                            serialization_metadata_json String,
+                            log_id Nullable(String)
+                        )
+                        ENGINE = MergeTree()
+                        ORDER BY (app_id, timestamp_utc, sequence_id)
+                        TTL toDateTime(timestamp_utc / 1000) + INTERVAL ${options.retentionDaysFrames} DAY
+                        """.trimIndent(),
                     )
-                    ENGINE = MergeTree()
-                    ORDER BY (app_id, timestamp_utc, sequence_id)
-                    TTL toDateTime(timestamp_utc / 1000) + INTERVAL ${options.retentionDaysFrames} DAY
-                    """.trimIndent(),
-                )
+                }
             }
+        } catch (_: Exception) {
+            // Bootstrap failures are non-fatal — the store is still usable if the
+            // connection recovers later (e.g., ClickHouse comes back online).
         }
     }
 
@@ -882,6 +901,42 @@ private class ClickHouseChronoStorage(
             }
         }
     }
+}
+
+/**
+ * Lazy wrapper around ValkeyChronoPurgeState that defers Jedis connection until
+ * the first actual access (put/get/count/listAll). If Valkey is down, the store
+ * can still be constructed and used for ingest — only purge operations will fail.
+ */
+private class LazyValkeyChronoPurgeState(
+    private val config: ValkeyConfig,
+    private val json: Json,
+) : ChronoPurgeState, Closeable {
+    @Volatile
+    private var delegate: ValkeyChronoPurgeState? = null
+    private val lock = java.util.concurrent.locks.ReentrantLock()
+
+    private fun getDelegate(): ValkeyChronoPurgeState {
+        var d = delegate
+        if (d != null) return d
+        lock.lock()
+        try {
+            d = delegate
+            if (d != null) return d
+            d = ValkeyChronoPurgeState(config, json)
+            delegate = d
+            return d
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    override fun put(job: PurgeJob) = getDelegate().put(job)
+    override fun get(purgeJobId: String): PurgeJob? = getDelegate().get(purgeJobId)
+    override fun listAll(): List<PurgeJob> = getDelegate().listAll()
+    override fun count(): Int = getDelegate().count()
+    override fun health(): Boolean? = try { getDelegate().health() } catch (_: Exception) { false }
+    override fun close() { delegate?.close() }
 }
 
 private class ValkeyChronoPurgeState(
