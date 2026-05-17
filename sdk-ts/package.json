@@ -36,6 +36,9 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/chronotrace"
+    "url": "https://github.com/TTT/ChronoTrace"
+  },
+  "bugs": {
+    "url": "https://github.com/TTT/ChronoTrace/issues"
   }
 }
