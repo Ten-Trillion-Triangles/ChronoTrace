@@ -58,6 +58,10 @@ publishing {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // Ensure POM files are generated before tests run
+    tasks.findByName("generatePomFileForJvmPublication")?.let { dependsOn(it) }
+    tasks.findByName("generatePomFileForJsPublication")?.let { dependsOn(it) }
+    tasks.findByName("generatePomFileForWasmJsPublication")?.let { dependsOn(it) }
 }
 
 val chronoTraceCompilerPluginJar = rootProject.project(":chronotrace-kotlin-plugin").tasks.named("jar", Jar::class.java)
