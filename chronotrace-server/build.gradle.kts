@@ -25,8 +25,8 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("io.ktor:ktor-server-test-host-jvm:3.1.1")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit5:2.2.21")
-    testImplementation("org.testcontainers:clickhouse:1.21.3")
-    testImplementation("org.testcontainers:junit-jupiter:1.21.3")
+    testImplementation("org.testcontainers:clickhouse:1.21.4")
+    testImplementation("org.testcontainers:junit-jupiter:1.21.4")
     testImplementation("org.junit.jupiter:junit-jupiter-engine:5.12.2")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.12.2")
 }

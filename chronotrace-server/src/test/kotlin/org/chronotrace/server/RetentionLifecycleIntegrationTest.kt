@@ -57,7 +57,9 @@ class RetentionLifecycleIntegrationTest {
             retentionDaysFrames = 7,
             clickHouse = ClickHouseConfig(
                 jdbcUrl = clickHouse.jdbcUrl,
-                database = "chronotrace",
+                database = "default",
+                username = "test",
+                password = "test",
             ),
             valkey = ValkeyConfig(
                 host = valkey.host,

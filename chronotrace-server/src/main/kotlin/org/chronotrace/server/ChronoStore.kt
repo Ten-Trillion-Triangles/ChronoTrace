@@ -548,11 +548,11 @@ internal class ClickHouseChronoStorage(
 
     private fun doIngestSync(batch: IngestBatch) {
         connection().use { connection ->
-            connection.autoCommit = false
+            // Note: ClickHouse JDBC does not support JDBC transactions.
+            // Each INSERT is auto-committed individually; no explicit commit needed.
             insertLogs(connection, batch.logs)
             insertSpans(connection, batch.spans)
             insertFrames(connection, batch.frameSnapshots)
-            connection.commit()
         }
     }
 
