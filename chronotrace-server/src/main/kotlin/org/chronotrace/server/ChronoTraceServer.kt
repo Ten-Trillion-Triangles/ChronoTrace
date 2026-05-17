@@ -24,6 +24,8 @@ fun main() {
                 username = System.getenv("CHRONOTRACE_CLICKHOUSE_USERNAME"),
                 password = System.getenv("CHRONOTRACE_CLICKHOUSE_PASSWORD"),
                 connectTimeoutMs = System.getenv("CHRONOTRACE_CLICKHOUSE_CONNECT_TIMEOUT_MS")?.toIntOrNull() ?: 5_000,
+                ingestQueueCapacity = System.getenv("CHRONOTRACE_CLICKHOUSE_INGEST_QUEUE_CAPACITY")?.toIntOrNull() ?: 0,
+                ingestQueueTimeoutMs = System.getenv("CHRONOTRACE_CLICKHOUSE_INGEST_QUEUE_TIMEOUT_MS")?.toLongOrNull() ?: 5_000L,
             )
         },
         valkey = System.getenv("CHRONOTRACE_VALKEY_HOST")?.let { hostName ->
