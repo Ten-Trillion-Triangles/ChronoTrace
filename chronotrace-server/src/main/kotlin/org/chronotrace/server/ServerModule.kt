@@ -57,7 +57,16 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         json(json)
     }
     install(CallLogging)
-    install(WebSockets)
+    install(WebSockets) {
+        val wsIdleTimeoutMs = store.options.wsIdleTimeoutMs
+        // Ktor 3.x uses Long milliseconds for pingPeriodMillis and timeoutMillis.
+        // When wsIdleTimeoutMs is 0, disable idle timeout by setting both to 0.
+        if (wsIdleTimeoutMs > 0) {
+            pingPeriodMillis = wsIdleTimeoutMs
+            timeoutMillis = wsIdleTimeoutMs
+        }
+        // else: both 0 → no ping, no server-side idle timeout enforcement
+    }
     install(StatusPages) {
         exception<Throwable> { call, cause ->
             call.respond(mapOf("error" to (cause.message ?: "unknown error")))

@@ -261,6 +261,7 @@ npm install @chronotrace/sdk-ts
 - `CHRONOTRACE_CLICKHOUSE_JDBC_URL` (when using ClickHouse)
 - `CHRONOTRACE_VALKEY_HOST` (for purge job persistence)
 - `CHRONOTRACE_AUTH_MODE=none|apiKey|bearer` (default: `none`)
+- `CHRONOTRACE_WS_IDLE_TIMEOUT_MS` — WebSocket idle timeout in milliseconds. Server sends ping/pong keepalive after this duration of inactivity, and closes the connection if no pong received. Set to `0` to disable. Default: `60000` (60 seconds).
 
 **License:** MIT (likely, not yet formally decided)
 

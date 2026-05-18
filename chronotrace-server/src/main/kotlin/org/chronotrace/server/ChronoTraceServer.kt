@@ -45,6 +45,7 @@ fun main() {
                 keyPrefix = System.getenv("CHRONOTRACE_VALKEY_KEY_PREFIX") ?: "chronotrace",
             )
         },
+        wsIdleTimeoutMs = System.getenv("CHRONOTRACE_WS_IDLE_TIMEOUT_MS")?.toLongOrNull() ?: 60_000L,
     )
 
     embeddedServer(Netty, port = port, host = host) {

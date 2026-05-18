@@ -582,6 +582,7 @@ All configuration is via environment variables:
 | `CHRONOTRACE_RETENTION_LOGS_DAYS` | `30` | Log retention in days |
 | `CHRONOTRACE_RETENTION_SPANS_DAYS` | `30` | Span retention in days |
 | `CHRONOTRACE_RETENTION_FRAMES_DAYS` | `7` | Frame snapshot retention in days |
+| `CHRONOTRACE_WS_IDLE_TIMEOUT_MS` | `60000` | WebSocket idle timeout in ms (set `0` to disable) |
 
 ### ClickHouse Configuration
 

@@ -53,4 +53,19 @@ data class ChronoStoreOptions(
      * If a key in `apiKeys` has no entry here, it is treated as unlimited and client role.
      */
     val keyMetadata: Map<String, ApiKeyMetadata> = emptyMap(),
+    /**
+     * WebSocket idle timeout in milliseconds. If a connection remains open without
+     * any frames exchanged for this duration, the server sends a ping. If the pong
+     * is not received within the timeout, the connection is closed. Set to 0 to
+     * disable idle timeout (connections never timeout on the server side).
+     * Default: 60_000 (60 seconds).
+     */
+    val wsIdleTimeoutMs: Long = 60_000,
+    /**
+     * Size of the bounded thread pool for async purge job execution.
+     * Defaults to 1 (serial execution). Values > 1 enable concurrent purge jobs.
+     * Setting this > 1 does not change the ordering guarantee of state transitions
+     * within a single job, but allows multiple jobs to be in-flight simultaneously.
+     */
+    val purgeThreadPoolSize: Int = 1,
 )
