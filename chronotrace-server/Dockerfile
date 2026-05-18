@@ -8,8 +8,8 @@ WORKDIR /app
 COPY . /app
 
 RUN chmod +x ./gradlew && \
-    sed -i "s|org\.gradle\.java\.home=.*|org.gradle.java.home=/opt/java/openjdk|" gradle.properties && \
     ./gradlew :chronotrace-server:installDist \
-    --no-configuration-cache
+    --no-configuration-cache \
+    -Dorg.gradle.java.home=/opt/java/openjdk
 
 CMD ["./chronotrace-server/build/install/chronotrace-server/bin/chronotrace-server"]

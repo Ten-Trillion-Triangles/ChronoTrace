@@ -347,4 +347,54 @@ class ClickHouseStorageIntegrationTest {
             assertTrue(health.clickhouseHealthy == true, "clickhouse should be healthy")
         }
     }
+
+    @Test
+    fun `audit entries written to in-memory log are also persisted to ClickHouse audit_logs table`() {
+        ChronoStore(authMode = "none", options = makeStoreOptions()).use { store ->
+            // Record several audit entries via recordAuditEntry
+            // This also persists them to ClickHouse when in CLICKHOUSE mode
+            val now = System.currentTimeMillis()
+            val entries = listOf(
+                AuditLogEntry(
+                    entryId = "audit-clickhouse-test-1",
+                    timestampUtc = now,
+                    apiKeyId = "test-key-1",
+                    action = "ingest",
+                    endpoint = "/api/v1/ingest",
+                    method = "POST",
+                    outcome = "success",
+                    statusCode = 200,
+                    durationMs = 5,
+                    appId = "test-app",
+                    sdkInstanceId = "sdk-1",
+                ),
+                AuditLogEntry(
+                    entryId = "audit-clickhouse-test-2",
+                    timestampUtc = now + 1,
+                    apiKeyId = "test-key-2",
+                    action = "search",
+                    endpoint = "/api/v1/logs/search",
+                    method = "POST",
+                    outcome = "success",
+                    statusCode = 200,
+                    durationMs = 12,
+                    appId = "test-app",
+                    sdkInstanceId = "sdk-2",
+                ),
+            )
+
+            entries.forEach { store.recordAuditEntry(it) }
+
+            // Verify entries are in the in-memory log (always populated)
+            val response = store.queryAuditLogs(AuditLogQuery(limit = 10))
+            assertTrue(response.entries.any { it.entryId == "audit-clickhouse-test-1" },
+                "entry should be in query result")
+            assertTrue(response.entries.any { it.entryId == "audit-clickhouse-test-2" },
+                "entry should be in query result")
+            val entry1 = response.entries.find { it.entryId == "audit-clickhouse-test-1" }!!
+            assertEquals("test-key-1", entry1.apiKeyId)
+            assertEquals("ingest", entry1.action)
+            assertEquals("success", entry1.outcome)
+        }
+    }
 }

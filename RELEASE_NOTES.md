@@ -91,14 +91,14 @@ cd sdk-ts && npm run check:contracts && npm test && npm run build
 | `CHRONOTRACE_AUTH_MODE` | `none` | `none`, `apiKey`, or `bearer` |
 | `CHRONOTRACE_API_KEYS` | — | Comma-separated API keys (for `apiKey` mode) |
 | `CHRONOTRACE_BEARER_TOKENS` | — | Comma-separated bearer tokens (for `bearer` mode) |
-| `CHRONOTRACE_STORAGE_MODE` | `memory` | `memory`, `file`, or `clickhouse` |
+| `CHRONOTRACE_STORAGE_MODE` | `file` | `memory`, `file`, or `clickhouse` |
 | `CHRONOTRACE_CLICKHOUSE_JDBC_URL` | `jdbc:clickhouse://localhost:8123/default` | ClickHouse JDBC URL |
 | `CHRONOTRACE_CLICKHOUSE_DATABASE` | `chronotrace` | ClickHouse database name |
 | `CHRONOTRACE_VALKEY_HOST` | `localhost` | Valkey host |
 | `CHRONOTRACE_VALKEY_PORT` | `6379` | Valkey port |
 | `CHRONOTRACE_RETENTION_LOGS_DAYS` | `30` | Log retention in days |
 | `CHRONOTRACE_RETENTION_SPANS_DAYS` | `30` | Span retention in days |
-| `CHRONOTRACE_RETENTION_FRAMES_DAYS` | `30` | Frame retention in days |
+| `CHRONOTRACE_RETENTION_FRAMES_DAYS` | `7` | Frame snapshot retention in days |
 | `CHRONOTRACE_INGEST_QUEUE_CAPACITY` | `0` | Ingest queue capacity (0 = sync) |
 | `CHRONOTRACE_INGEST_QUEUE_TIMEOUT_MS` | `5000` | Ingest queue offer timeout |
 

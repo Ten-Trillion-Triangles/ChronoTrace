@@ -107,11 +107,13 @@ Selector validation happens at `createPurgeJob` time. Unsupported fields (e.g., 
 
 ## Async Purge Execution
 
-`ChronoStore` owns a single-threaded `Executors.newSingleThreadExecutor()` for purge work. This ensures:
+`ChronoStore` owns a bounded thread pool (`Executors.newFixedThreadPool(purgeThreadPoolSize)`) for purge work, configurable via `ChronoStoreOptions.purgeThreadPoolSize` (default: 1). With the default of 1, behavior is identical to the prior single-threaded executor:
 
-1. Jobs execute **serially** — no two purges run simultaneously.
+1. Jobs execute **serially** at the default pool size of 1 — no two purges run simultaneously.
 2. Job state transitions (`ACCEPTED` → `RUNNING` → `COMPLETED/FAILED`) are ordered.
 3. The `RUNNING` state is observable by polling `getPurgeJob`.
+
+When `purgeThreadPoolSize > 1`, multiple jobs may be in-flight simultaneously. A job's own state transitions remain ordered (ACCEPTED→RUNNING→COMPLETED/FAILED), but jobs may overtake each other.
 
 ### Polling for Completion
 

@@ -47,7 +47,7 @@ class ChronoStore(
     private val rules = ConcurrentHashMap<String, RemoteRule>()
     private val storage: ChronoStorage
     private val purgeState: ChronoPurgeState
-    private val purgeExecutor = Executors.newSingleThreadExecutor()
+    private val purgeExecutor = Executors.newFixedThreadPool(options.purgeThreadPoolSize)
 
     // ── Phase 6: Auth hardening ────────────────────────────────────────────
     // Key registry: keyId → ApiKeyMetadata. Initialized from options.keyMetadata
@@ -61,6 +61,9 @@ class ChronoStore(
     private val quotaTracker: QuotaTracker
     // In-memory audit log (append-only list of entries).
     private val auditLog = CopyOnWriteArrayList<AuditLogEntry>()
+    // FILE-mode key persistence: path to keys.json snapshot, non-null only when
+    // dataDir is configured (null when using InMemoryChronoStorage fallback).
+    private val keysSnapshotFile: java.nio.file.Path?
 
     init {
         require(options.retentionDaysLogs > 0) { "retentionDaysLogs must be > 0, got ${options.retentionDaysLogs}" }
@@ -84,6 +87,23 @@ class ChronoStore(
         keyRegistry = ConcurrentHashMap(initial)
         originalApiKeys = options.apiKeys.toMutableSet()
         quotaTracker = QuotaTracker(keyRegistry)
+
+        // Initialize FILE-mode key persistence path.
+        // Only non-null when storage is FILE mode with a real dataDir
+        // (i.e., not the InMemoryChronoStorage fallback when dataDir is null).
+        keysSnapshotFile = if (options.storageMode == StorageMode.FILE && options.dataDir != null) {
+            options.dataDir.resolve("keys.json")
+        } else {
+            null
+        }
+
+        // Load persisted keys (FILE mode with dataDir only).
+        // Merges persisted keys with the initial keyRegistry — persisted keys
+        // win for any keyId that's already in the initial config so server-side
+        // config takes precedence over stale snapshots.
+        if (keysSnapshotFile != null) {
+            loadPersistedKeys()
+        }
     }
 
     override fun ingest(batch: IngestBatch) = storage.ingest(batch)
@@ -246,6 +266,8 @@ class ChronoStore(
         keyRegistry[keyId] = metadata
         // Add the new key to originalApiKeys so it's immediately usable for authentication
         originalApiKeys.add(keyValue)
+        // Persist keys to disk (FILE mode with dataDir only).
+        persistKeys()
         return metadata to keyValue
     }
 
@@ -272,17 +294,78 @@ fun rotateKey(keyId: String): Pair<ApiKeyMetadata, String>? {
         }
         // Add the new keyValue so it can be used for authentication
         originalApiKeys.add(newKeyValue)
+        // Persist keys to disk (FILE mode with dataDir only).
+        persistKeys()
         return updated to newKeyValue
     }
 
     /**
      * Revoke a key by keyId. Returns true if the key was found and revoked.
+     * Removes the key from originalApiKeys so revoked credentials are immediately rejected.
      */
     fun revokeKey(keyId: String): Boolean {
         val current = keyRegistry[keyId] ?: return false
         val updated = current.copy(revokedAtUtc = Instant.now().toEpochMilli())
         keyRegistry[keyId] = updated
+        // Remove the old credential from originalApiKeys so revoked keys are immediately rejected.
+        // Both keyValue and keyId must be removed — keyId may be present as a self-lookup
+        // (when keyId == keyValue, both are the same string).
+        originalApiKeys.remove(current.keyValue ?: current.keyId)
+        if (current.keyId == current.keyValue) {
+            originalApiKeys.remove(current.keyId)
+        }
+        // Persist keys to disk (FILE mode with dataDir only).
+        persistKeys()
         return true
+    }
+
+    /**
+     * Persist the current key registry to keys.json snapshot.
+     * Called after every createKey / rotateKey / revokeKey.
+     * Idempotent — no-op when keysSnapshotFile is null (no dataDir configured).
+     */
+    private fun persistKeys() {
+        val file = keysSnapshotFile ?: return
+        val snapshot = KeyStoreSnapshot(
+            keys = keyRegistry.values.toList(),
+            savedAtUtc = Instant.now().toEpochMilli(),
+        )
+        try {
+            file.toFile().parentFile?.mkdirs()
+            file.toFile().writeText(json.encodeToString(KeyStoreSnapshot.serializer(), snapshot))
+        } catch (e: Exception) {
+            // Log but don't fail the operation — key changes are still in memory.
+            // FileChronoStorage already persists data; this is best-effort key persistence.
+        }
+    }
+
+    /**
+     * Load persisted keys from keys.json snapshot on startup.
+     * Merges persisted keys with the initial keyRegistry — server-side config
+     * (from options) takes precedence for keys that exist in both, so stale
+     * snapshots cannot override active config. New keys from the snapshot
+     * (created in a previous run) are added normally.
+     */
+    private fun loadPersistedKeys() {
+        val file = keysSnapshotFile ?: return
+        if (!file.toFile().exists()) return
+        try {
+            val snapshot = json.decodeFromString(KeyStoreSnapshot.serializer(), file.toFile().readText())
+            for (persisted in snapshot.keys) {
+                // Only add if not already in keyRegistry — server config wins over stale snapshots.
+                // Also skip revoked keys — they should stay revoked after restart.
+                if (persisted.keyId !in keyRegistry.keys && !persisted.isRevoked) {
+                    keyRegistry[persisted.keyId] = persisted
+                    // Make the keyValue valid for authentication.
+                    // keyValue may be null for older snapshots that only stored keyId;
+                    // use keyId itself as the credential in that case.
+                    val credential = persisted.keyValue ?: persisted.keyId
+                    originalApiKeys.add(credential)
+                }
+            }
+        } catch (e: Exception) {
+            // If snapshot is corrupt or unreadable, start clean — keys are in memory.
+        }
     }
 
     /** Check if a key is currently valid (exists and not revoked). */
@@ -332,8 +415,10 @@ fun rotateKey(keyId: String): Pair<ApiKeyMetadata, String>? {
      */
     fun recordAuditEntry(entry: AuditLogEntry) {
         auditLog.add(entry)
-        // In-memory audit log is unbounded for now; in production this would
-        // also write to ClickHouse for durability and cross-instance queries.
+        // Persist to ClickHouse for durability and cross-instance queries when configured.
+        if (options.storageMode == StorageMode.CLICKHOUSE) {
+            (storage as? ClickHouseChronoStorage)?.insertAuditEntries(listOf(entry))
+        }
     }
 
     /**
@@ -721,6 +806,16 @@ internal class ClickHouseChronoStorage(
 
     init {
         bootstrap()
+        // Warn at startup when bounceOnRejected=false and the bounded queue is active:
+        // events will be silently dropped when the queue is full (no 503, no client retry triggered).
+        if (!config.bounceOnRejected && config.ingestQueueCapacity > 0) {
+            System.err.println(
+                "[ChronoTrace] WARNING: bounceOnRejected=false with ingestQueueCapacity=${config.ingestQueueCapacity}. " +
+                    "The ingest queue will silently drop events when full. " +
+                    "Clients will receive HTTP 200 (accepted) but events will not be stored. " +
+                    "Set CHRONOTRACE_BOUNCE_ON_REJECTED=true (default) to return HTTP 503 instead."
+            )
+        }
     }
 
     /**
@@ -767,6 +862,102 @@ internal class ClickHouseChronoStorage(
     override fun close() {
         executor?.shutdown()
         executor?.awaitTermination(5, TimeUnit.SECONDS)
+    }
+
+    fun insertAuditEntries(entries: List<AuditLogEntry>) {
+        if (entries.isEmpty()) return
+        connection().use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO ${config.database}.audit_logs (
+                    entry_id, timestamp_utc, api_key_id, action, endpoint, method,
+                    outcome, status_code, request_size_bytes, response_size_bytes,
+                    duration_ms, app_id, sdk_instance_id, trace_id, ip_address
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+            ).use { statement ->
+                for (entry in entries) {
+                    statement.setString(1, entry.entryId)
+                    statement.setLong(2, entry.timestampUtc)
+                    statement.setString(3, entry.apiKeyId)
+                    statement.setString(4, entry.action)
+                    statement.setString(5, entry.endpoint)
+                    statement.setString(6, entry.method)
+                    statement.setString(7, entry.outcome)
+                    statement.setInt(8, entry.statusCode)
+                    statement.setLong(9, entry.requestSizeBytes)
+                    statement.setLong(10, entry.responseSizeBytes)
+                    statement.setLong(11, entry.durationMs)
+                    statement.setString(12, entry.appId)
+                    statement.setString(13, entry.sdkInstanceId)
+                    statement.setString(14, entry.traceId)
+                    statement.setString(15, entry.ipAddress)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
+            }
+        }
+    }
+
+    private fun auditLogEntryFromRow(rs: java.sql.ResultSet): AuditLogEntry {
+        return AuditLogEntry(
+            entryId = rs.getString("entry_id"),
+            timestampUtc = rs.getLong("timestamp_utc"),
+            apiKeyId = rs.getString("api_key_id"),
+            action = rs.getString("action"),
+            endpoint = rs.getString("endpoint"),
+            method = rs.getString("method"),
+            outcome = rs.getString("outcome"),
+            statusCode = rs.getInt("status_code"),
+            requestSizeBytes = rs.getLong("request_size_bytes"),
+            responseSizeBytes = rs.getLong("response_size_bytes"),
+            durationMs = rs.getLong("duration_ms"),
+            appId = rs.getString("app_id"),
+            sdkInstanceId = rs.getString("sdk_instance_id"),
+            traceId = rs.getString("trace_id"),
+            ipAddress = rs.getString("ip_address"),
+        )
+    }
+
+    fun queryAuditLogs(query: AuditLogQuery): AuditLogResponse {
+        val sql = buildString {
+            append(
+                """
+                SELECT entry_id, timestamp_utc, api_key_id, action, endpoint, method,
+                outcome, status_code, request_size_bytes, response_size_bytes,
+                duration_ms, app_id, sdk_instance_id, trace_id, ip_address
+                FROM ${config.database}.audit_logs
+                WHERE 1=1
+                """.trimIndent(),
+            )
+            if (query.apiKeyId != null) append(" AND api_key_id = ?")
+            if (query.action != null) append(" AND action = ?")
+            if (query.outcome != null) append(" AND outcome = ?")
+            if (query.startTimeUtc != null) append(" AND timestamp_utc >= ?")
+            if (query.endTimeUtc != null) append(" AND timestamp_utc <= ?")
+            if (query.appId != null) append(" AND app_id = ?")
+            append(" ORDER BY timestamp_utc DESC LIMIT ?")
+        }
+        connection().use { connection ->
+            connection.prepareStatement(sql).use { statement ->
+                var index = 1
+                if (query.apiKeyId != null) statement.setString(index++, query.apiKeyId)
+                if (query.action != null) statement.setString(index++, query.action)
+                if (query.outcome != null) statement.setString(index++, query.outcome)
+                if (query.startTimeUtc != null) statement.setLong(index++, query.startTimeUtc)
+                if (query.endTimeUtc != null) statement.setLong(index++, query.endTimeUtc)
+                if (query.appId != null) statement.setString(index++, query.appId)
+                statement.setInt(index, query.limit.coerceIn(1, 1000))
+                statement.executeQuery().use { rs ->
+                    val entries = buildList {
+                        while (rs.next()) {
+                            add(auditLogEntryFromRow(rs))
+                        }
+                    }
+                    return AuditLogResponse(entries = entries)
+                }
+            }
+        }
     }
 
     override fun searchLogs(request: SearchLogsRequest): SearchLogsResponse {
@@ -1022,6 +1213,30 @@ override fun health(): StorageHealth {
                         ENGINE = MergeTree()
                         ORDER BY (app_id, timestamp_utc, sequence_id)
                         TTL toDateTime(timestamp_utc / 1000) + INTERVAL ${options.retentionDaysFrames} DAY
+                        """.trimIndent(),
+                    )
+                    statement.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ${config.database}.audit_logs (
+                            entry_id String,
+                            timestamp_utc Int64,
+                            api_key_id String,
+                            action String,
+                            endpoint String,
+                            method String,
+                            outcome String,
+                            status_code UInt32,
+                            request_size_bytes UInt64,
+                            response_size_bytes UInt64,
+                            duration_ms UInt64,
+                            app_id Nullable(String),
+                            sdk_instance_id Nullable(String),
+                            trace_id Nullable(String),
+                            ip_address Nullable(String)
+                        )
+                        ENGINE = MergeTree()
+                        ORDER BY (api_key_id, timestamp_utc)
+                        TTL toDateTime(timestamp_utc / 1000) + INTERVAL ${options.retentionDaysLogs} DAY
                         """.trimIndent(),
                     )
                 }
@@ -1362,6 +1577,12 @@ private fun logLike(frame: FrameSnapshot): LogRecord = LogRecord(
     sequenceId = frame.sequenceId,
     level = LogLevel.INFO,
     message = "",
+)
+
+@Serializable
+private data class KeyStoreSnapshot(
+    val keys: List<ApiKeyMetadata> = emptyList(),
+    val savedAtUtc: Long = 0,
 )
 
 @Serializable

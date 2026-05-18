@@ -17,7 +17,8 @@ import { ChronoTrace, ChronoLogger, withTrace } from "@chronotrace/sdk-ts";
 
 // Initialize the client
 ChronoTrace.init({
-  endpoint: "http://localhost:8080",
+  appId: "my-service",
+  serverUrl: "http://localhost:8080",
 });
 
 // Log messages
@@ -70,14 +71,58 @@ const result = await withTrace("process-order", async () => {
 ## Configuration
 
 ```typescript
-interface ChronoTraceConfig {
-  endpoint: string;           // ChronoTrace server URL
-  apiKey?: string;            // Optional API key
-  serviceName?: string;       // Service identifier (default: "unknown")
-  sampleRate?: number;        // 0–1, sampling probability
-  flushIntervalMs?: number;  // Flush interval (default: 1000)
-  transport?: Transport;      // Override default HTTP transport
-}
+import { ChronoTrace } from "@chronotrace/sdk-ts";
+
+ChronoTrace.init({
+  appId: "my-service",        // Required: unique application identifier
+  serverUrl: "http://localhost:8080",  // Server URL (http/https for HTTP, ws/wss for WebSocket)
+  serviceName: "my-service",   // Service name (default: "unknown")
+  environment: "development",   // Environment tag (optional)
+  auth: { mode: "apiKey", apiKey: "ctr_sk_..." },  // Auth config (optional)
+  captureConfig: {             // Capture behavior (optional)
+    autoCaptureLevels: ["ERROR", "FATAL"],
+    maxStringLength: 4096,
+  },
+  bufferConfig: {              // Buffer behavior (optional)
+    maxMemoryMB: 50,
+    flushIntervalMs: 2000,
+    overflowStrategy: "DROP_OLDEST",
+  },
+});
+```
+
+All configuration fields:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `appId` | `string` | **Yes** | — | Unique application identifier |
+| `serverUrl` | `string` | No | `http://localhost:8080` | ChronoTrace server URL |
+| `serviceName` | `string` | No | `"unknown"` | Service identifier |
+| `environment` | `string` | No | — | Environment tag (e.g. `"production"`) |
+| `auth` | `AuthConfig` | No | `{ mode: "none" }` | Authentication settings |
+| `runtime` | `"auto" \| "node" \| "browser"` | No | `"auto"` | Runtime flavor |
+| `captureConfig` | `CaptureConfig` | No | see defaults | What to capture and how |
+| `bufferConfig` | `BufferConfig` | No | see defaults | Buffer/flush behavior |
+| `transport` | `ChronoTransport` | No | HTTP transport | Override transport layer |
+| `contextManager` | `ContextManager` | No | — | Custom context manager |
+| `fetchImpl` | `typeof fetch` | No | global `fetch` | HTTP client override |
+| `webSocketFactory` | `(url: string) => WebSocket` | No | native WS | WebSocket factory |
+| `rules` | `RemoteRule[]` | No | — | Client-side redaction rules |
+
+AuthConfig examples:
+
+```typescript
+// No auth (default)
+auth: { mode: "none" }
+
+// API key
+auth: { mode: "apiKey", apiKey: "ctr_sk_..." }
+
+// Bearer token
+auth: { mode: "bearer", token: "eyJ..." }
+
+// mTLS (Node.js only)
+auth: { mode: "mTLS", clientCertificateAlias: "chronotrace-client" }
 ```
 
 ## Entry Points
