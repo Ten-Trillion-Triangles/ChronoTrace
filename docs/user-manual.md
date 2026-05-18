@@ -68,14 +68,14 @@ chronotrace {
 ### TypeScript SDK (Node.js and Browser)
 
 ```bash
-npm install @chronotrace/sdk
+npm install @chronotrace/sdk-ts
 ```
 
 For browser projects using Vite, add the plugin to `vite.config.ts`:
 
 ```typescript
 import { defineConfig } from 'vite';
-import { createChronoTraceVitePlugin } from '@chronotrace/sdk/vite';
+import { createChronoTraceVitePlugin } from '@chronotrace/sdk-ts/vite';
 
 export default defineConfig({
     plugins: [createChronoTraceVitePlugin()]
@@ -336,7 +336,7 @@ ChronoTrace.init(
 ### Initialization
 
 ```typescript
-import { ChronoTrace } from '@chronotrace/sdk';
+import { ChronoTrace } from '@chronotrace/sdk-ts';
 
 ChronoTrace.init({
     appId: 'my-node-service',
@@ -351,7 +351,7 @@ ChronoTrace.init({
 ### Logging
 
 ```typescript
-import { ChronoLogger } from '@chronotrace/sdk';
+import { ChronoLogger } from '@chronotrace/sdk-ts';
 
 async function handleOrder(orderId: string, amount: number) {
     await ChronoLogger.info('processing order', { orderId, amount });
@@ -368,7 +368,7 @@ async function handleOrder(orderId: string, amount: number) {
 ### Spans and Traces
 
 ```typescript
-import { withTrace, withSpan, startSpan } from '@chronotrace/sdk';
+import { withTrace, withSpan, startSpan } from '@chronotrace/sdk-ts';
 
 async function processOrder(orderId: string) {
     // withTrace wraps a block — captures locals if the Vite plugin is applied
@@ -403,7 +403,7 @@ async function processPayment(cardToken: string, amount: number, userId: string)
 ### Context Propagation
 
 ```typescript
-import { ChronoTrace } from '@chronotrace/sdk';
+import { ChronoTrace } from '@chronotrace/sdk-ts';
 
 // Inject into outgoing HTTP headers
 function callDownstream() {
@@ -427,7 +427,7 @@ function handleRequest(req: Request) {
 ### Using a WebSocket Transport
 
 ```typescript
-import { ChronoTrace, WebSocketTransport } from '@chronotrace/sdk';
+import { ChronoTrace, WebSocketTransport } from '@chronotrace/sdk-ts';
 
 ChronoTrace.init({
     appId: 'my-service',
@@ -441,7 +441,7 @@ ChronoTrace.init({
 By default, the Node.js SDK uses `AsyncLocalStorage` to maintain trace context across asynchronous operations:
 
 ```typescript
-import { createNodeChronoTrace } from '@chronotrace/sdk/node';
+import { createNodeChronoTrace } from '@chronotrace/sdk-ts/node';
 
 // createNodeChronoTrace() returns a pre-configured ChronoTrace with
 // AsyncLocalStorage context manager — use when you need async context propagation
@@ -460,7 +460,7 @@ export { chrono };
 ### Initialization
 
 ```typescript
-import { ChronoTrace } from '@chronotrace/sdk';
+import { ChronoTrace } from '@chronotrace/sdk-ts';
 
 ChronoTrace.init({
     appId: 'web-frontend',
@@ -478,7 +478,7 @@ When using Vite, add `createChronoTraceVitePlugin()` to your `vite.config.ts`. T
 ```typescript
 // vite.config.ts
 import { defineConfig } from 'vite';
-import { createChronoTraceVitePlugin } from '@chronotrace/sdk/vite';
+import { createChronoTraceVitePlugin } from '@chronotrace/sdk-ts/vite';
 
 export default defineConfig({
     plugins: [
@@ -509,7 +509,7 @@ Has `cartId` and `total` automatically serialized into the frame snapshot, witho
 For browser projects not using Vite, use `instrumentSource` to transform code at runtime or build time:
 
 ```typescript
-import { instrumentSource } from '@chronotrace/sdk/instrumentation';
+import { instrumentSource } from '@chronotrace/sdk-ts/instrumentation';
 
 // instrumentSource(code, options) returns transformed code with capture calls injected
 const transformed = instrumentSource(originalCode, {
@@ -575,7 +575,7 @@ All configuration is via environment variables:
 | `PORT` | `8080` | HTTP server port |
 | `CHRONOTRACE_BIND_HOST` | `127.0.0.1` | Interface to bind to |
 | `CHRONOTRACE_AUTH_MODE` | `none` | Auth mode: `none`, `apiKey`, `bearer` |
-| `CHRONOTRACE_STORAGE_MODE` | `FILE` | Storage backend: `FILE`, `CLICKHOUSE`, `IN_MEMORY` |
+| `CHRONOTRACE_STORAGE_MODE` | `file` | Storage backend: `file`, `clickhouse`, or `memory` |
 | `CHRONOTRACE_DATA_DIR` | (current dir) | Directory for file-based storage |
 | `CHRONOTRACE_API_KEYS` | (none) | Comma-separated list of API keys |
 | `CHRONOTRACE_BEARER_TOKENS` | (none) | Comma-separated list of bearer tokens |
@@ -970,7 +970,7 @@ docker compose up -d  # starts ClickHouse + server
 
 ```bash
 # TypeScript
-npm install @chronotrace/sdk
+npm install @chronotrace/sdk-ts
 
 # Kotlin Multiplatform
 // Add to build.gradle.kts: implementation("com.chronotrace:sdk-kmp:0.1.0")
@@ -979,7 +979,7 @@ npm install @chronotrace/sdk
 **3. Initialize and log:**
 
 ```typescript
-import { ChronoTrace, ChronoLogger } from '@chronotrace/sdk';
+import { ChronoTrace, ChronoLogger } from '@chronotrace/sdk-ts';
 
 ChronoTrace.init({
     appId: 'my-app',

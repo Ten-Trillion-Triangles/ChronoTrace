@@ -237,7 +237,7 @@ To monitor SDK queue pressure:
 
 ```typescript
 // TypeScript SDK
-import { ChronoLogger } from '@chronotrace/sdk';
+import { ChronoLogger } from '@chronotrace/sdk-ts';
 
 const logger = new ChronoLogger({ ... });
 const health = logger.getRuntimeHealth();
