@@ -43,6 +43,7 @@ class ServerMetricsTest {
             "chronotrace_queue_size",
             "chronotrace_dropped_events_total",
             "chronotrace_active_connections",
+            "chronotrace_records_dropped_due_to_ttl",
         ).forEach { metric ->
             assertTrue(metric in body, "Missing metric: $metric")
         }
@@ -109,6 +110,26 @@ class ServerMetricsTest {
         // Accessing /metrics must not require auth
         val response = client.get("/metrics")
         assertEquals(HttpStatusCode.OK, response.status, "/metrics should be accessible without auth")
+    }
+
+    @Test
+    fun `records_dropped_due_to_ttl metric is present and reflects storage TTL drops`() = testApplication {
+        val store = ChronoStore("none")
+        application {
+            chronoTraceModule(store)
+        }
+
+        val response = client.get("/metrics")
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = response.bodyAsText()
+
+        assertTrue(body.contains("chronotrace_records_dropped_due_to_ttl"), "records_dropped_due_to_ttl metric must be present")
+        assertTrue(body.contains("# TYPE chronotrace_records_dropped_due_to_ttl counter"), "metric must have TYPE annotation")
+        assertTrue(body.contains("# HELP chronotrace_records_dropped_due_to_ttl"), "metric must have HELP annotation")
+        // For non-ClickHouse store (InMemory), the metric should be 0
+        val match = Regex("chronotrace_records_dropped_due_to_ttl (\\d+)").find(body)
+        assertNotNull(match, "records_dropped_due_to_ttl must have a numeric value")
+        assertEquals("0", match.groupValues[1], "TTL drops should be 0 in file/in-memory mode")
     }
 
     @Test

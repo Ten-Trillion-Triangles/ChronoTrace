@@ -39,9 +39,16 @@ import redis.clients.jedis.JedisPooled
 /** Thrown when the bounded ingest queue is full and the circuit breaker is open. */
 class IngestRejectedException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
+/**
+ * Thrown when a record fails validation at ingest time (e.g. malformed localsJson in a FrameSnapshot).
+ * Carries the record identifier so the HTTP layer can return a 400 with details.
+ */
+class RecordValidationException(val recordId: String, message: String) : RuntimeException(message)
+
 class ChronoStore(
     val authMode: String,
     val options: ChronoStoreOptions = ChronoStoreOptions(),
+    val serverMetrics: ServerMetrics = ServerMetrics(),
 ) : ChronoStoreBackend, Closeable {
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private val rules = ConcurrentHashMap<String, RemoteRule>()
@@ -69,7 +76,7 @@ class ChronoStore(
         require(options.retentionDaysLogs > 0) { "retentionDaysLogs must be > 0, got ${options.retentionDaysLogs}" }
         require(options.retentionDaysSpans > 0) { "retentionDaysSpans must be > 0, got ${options.retentionDaysSpans}" }
         require(options.retentionDaysFrames > 0) { "retentionDaysFrames must be > 0, got ${options.retentionDaysFrames}" }
-        val components = ChronoStoreFactory.create(options, json)
+        val components = ChronoStoreFactory.create(options, json, serverMetrics)
         storage = components.storage
         purgeState = components.purgeState
 
@@ -106,7 +113,20 @@ class ChronoStore(
         }
     }
 
-    override fun ingest(batch: IngestBatch) = storage.ingest(batch)
+    override fun ingest(batch: IngestBatch) {
+        // Validate frame snapshots before handing off to any storage backend
+        for (frame in batch.frameSnapshots) {
+            try {
+                json.parseToJsonElement(frame.localsJson)
+            } catch (e: Exception) {
+                throw RecordValidationException(
+                    frame.frameId,
+                    "FrameSnapshot '${frame.frameId}' has invalid localsJson: ${e.message}",
+                )
+            }
+        }
+        storage.ingest(batch)
+    }
 
     /**
      * Attempts to offer a batch to the ingest queue.
@@ -197,8 +217,8 @@ class ChronoStore(
         )
     }
 
-    override fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot> =
-        storage.stepFrame(frameId, direction, count)
+    override fun stepFrame(frameId: String, direction: String, count: Int, cursor: String?): StepFrameResult =
+        storage.stepFrame(frameId, direction, count, cursor)
 
     override fun queueSize(): Long = try {
         val purgeQueueSize = purgeState.queueSize()
@@ -503,6 +523,9 @@ fun rotateKey(keyId: String): Pair<ApiKeyMetadata, String>? {
         }
     }
 
+    // Expose TTL drop count for /metrics endpoint
+    fun recordsDroppedDueToTtl(): Long = storage.recordsDroppedDueToTtl()
+
     private fun validatePurgeSelector(field: String) {
         if (options.storageMode == StorageMode.CLICKHOUSE) {
             validateClickHousePurgeSelector(field)
@@ -511,7 +534,7 @@ fun rotateKey(keyId: String): Pair<ApiKeyMetadata, String>? {
 }
 
 private object ChronoStoreFactory {
-    fun create(options: ChronoStoreOptions, json: Json): StoreComponents {
+    fun create(options: ChronoStoreOptions, json: Json, serverMetrics: ServerMetrics): StoreComponents {
         return when (options.storageMode) {
             StorageMode.FILE -> {
                 if (options.dataDir == null) {
@@ -525,7 +548,7 @@ private object ChronoStoreFactory {
                 val clickHouse = requireNotNull(options.clickHouse) { "clickhouse mode requires ClickHouse config" }
                 val valkey = requireNotNull(options.valkey) { "clickhouse mode requires Valkey config" }
                 validateClickHouseConfig(clickHouse, valkey, options)
-                val storage = ClickHouseChronoStorage(clickHouse, options, json)
+                val storage = ClickHouseChronoStorage(clickHouse, options, json, serverMetrics)
                 // Lazily initialize ValkeyChronoPurgeState so that Valkey unavailability
                 // does not prevent the store from being constructed or used for ingest.
                 val purgeState = LazyValkeyChronoPurgeState(valkey, json)
@@ -612,18 +635,39 @@ private class InMemoryChronoStorage(
         frameSnapshots = frames.filter { it.traceId == traceId }.sortedWith(compareBy<FrameSnapshot> { it.timestampUtc }.thenBy { it.sequenceId }),
     )
 
-    override fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot> {
+    override fun stepFrame(frameId: String, direction: String, count: Int, cursor: String?): StepFrameResult {
         val ordered = frames.sortedWith(compareBy<FrameSnapshot> { it.timestampUtc }.thenBy { it.sequenceId })
-        val index = ordered.indexOfFirst { it.frameId == frameId }
-        if (index == -1) {
-            return emptyList()
-        }
-        val safeCount = count.coerceIn(1, 25)
-        return if (direction == "backward") {
-            ordered.subList((index - safeCount).coerceAtLeast(0), index)
+
+        // Resolve the starting frame: cursor takes precedence over frameId
+        val startIndex = if (cursor != null) {
+            ordered.indexOfFirst { it.frameId == cursor }
         } else {
-            ordered.subList(index + 1, (index + 1 + safeCount).coerceAtMost(ordered.size))
+            ordered.indexOfFirst { it.frameId == frameId }
         }
+
+        if (startIndex == -1) {
+            return StepFrameResult(emptyList(), null)
+        }
+
+        val safeCount = count.coerceIn(1, 25)
+
+        val resultFrames: List<FrameSnapshot> = if (direction == "backward") {
+            val start = (startIndex - safeCount).coerceAtLeast(0)
+            ordered.subList(start, startIndex)
+        } else {
+            val endExclusive = (startIndex + 1 + safeCount).coerceAtMost(ordered.size)
+            ordered.subList(startIndex + 1, endExclusive)
+        }
+
+        // nextCursor: pass the last frameId (forward) or first frameId (backward)
+        // so the next call resumes from the correct position.
+        val nextCursor = if (direction == "backward") {
+            resultFrames.firstOrNull()?.frameId
+        } else {
+            resultFrames.lastOrNull()?.frameId
+        }
+
+        return StepFrameResult(resultFrames, nextCursor)
     }
 
     fun purge(selector: PurgeSelector): Map<String, String> {
@@ -652,6 +696,8 @@ private class InMemoryChronoStorage(
     }
 
     override fun health(): StorageHealth = StorageHealth(storageMode = StorageMode.FILE, clickhouseHealthy = null, valkeyHealthy = null)
+
+    override fun recordsDroppedDueToTtl(): Long = 0
 
     private fun applyRetention() {
         val now = Instant.now().toEpochMilli()
@@ -709,7 +755,7 @@ private class FileChronoStorage(
     override fun getFrame(frameId: String): FrameSnapshot? = delegate.getFrame(frameId)
     override fun getFrameByLog(logId: String): FrameSnapshot? = delegate.getFrameByLog(logId)
     override fun getTrace(traceId: String): TraceView = delegate.getTrace(traceId)
-    override fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot> = delegate.stepFrame(frameId, direction, count)
+    override fun stepFrame(frameId: String, direction: String, count: Int, cursor: String?): StepFrameResult = delegate.stepFrame(frameId, direction, count, cursor)
     override fun counts(): StorageCounts = delegate.counts()
 
     override fun countsBySelector(selector: PurgeSelector): StorageCounts = delegate.countsBySelector(selector)
@@ -755,6 +801,8 @@ private class FileChronoStorage(
         )
         snapshotFile.toFile().writeText(json.encodeToString(StoreSnapshot.serializer(), snapshot))
     }
+
+    override fun recordsDroppedDueToTtl(): Long = delegate.recordsDroppedDueToTtl()
 }
 
 private class FileChronoPurgeState(
@@ -783,6 +831,7 @@ internal class ClickHouseChronoStorage(
     private val config: ClickHouseConfig,
     private val options: ChronoStoreOptions,
     private val json: Json,
+    private val serverMetrics: ServerMetrics,
 ) : ChronoStorage, Closeable {
     companion object {
         val SUPPORTED_PURGE_FIELDS = setOf("appId", "environment", "traceId", "spanId")
@@ -831,6 +880,12 @@ internal class ClickHouseChronoStorage(
         }
         val offered = ingestQueue!!.offer(Runnable { doIngestSync(batch) }, config.ingestQueueTimeoutMs, TimeUnit.MILLISECONDS)
         if (!offered) {
+            if (!config.bounceOnRejected) {
+                // Silent drop: record metrics and return without error
+                val dropped = batch.logs.size.toLong() + batch.spans.size.toLong() + batch.frameSnapshots.size.toLong()
+                serverMetrics.recordDropped(dropped)
+                return
+            }
             throw IngestRejectedException(
                 "Ingest queue full (capacity=${config.ingestQueueCapacity}, timeout=${config.ingestQueueTimeoutMs}ms). " +
                     "ClickHouse is slow or backpressured. Retry after a short delay.",
@@ -1053,19 +1108,35 @@ internal class ClickHouseChronoStorage(
         return TraceView(traceId = traceId, spans = spans, logs = logs, frameSnapshots = frames)
     }
 
-    override fun stepFrame(frameId: String, direction: String, count: Int): List<FrameSnapshot> {
-        val current = getFrame(frameId) ?: return emptyList()
+    override fun stepFrame(frameId: String, direction: String, count: Int, cursor: String?): StepFrameResult {
+        // Resolve boundary: cursor takes precedence over frameId
+        val (boundaryTs, boundarySeq) = if (cursor != null) {
+            val cursorFrame = getFrame(cursor)
+            if (cursorFrame == null) {
+                return StepFrameResult(emptyList(), null)
+            }
+            cursorFrame.timestampUtc to cursorFrame.sequenceId
+        } else {
+            val refFrame = getFrame(frameId) ?: return StepFrameResult(emptyList(), null)
+            refFrame.timestampUtc to refFrame.sequenceId
+        }
+
+        val safeCount = count.coerceIn(1, 25)
+        // Fetch one extra to determine if more data exists
+        val fetchCount = safeCount + 1
+
         val sql = if (direction == "backward") {
             "SELECT frame_id, trace_id, span_id, app_id, environment, sdk_instance_id, service_name, timestamp_utc, sequence_id, capture_reason, call_stack_json, locals_json, serialization_metadata_json, log_id FROM ${config.database}.frame_snapshots WHERE (timestamp_utc < ? OR (timestamp_utc = ? AND sequence_id < ?)) ORDER BY timestamp_utc DESC, sequence_id DESC LIMIT ?"
         } else {
             "SELECT frame_id, trace_id, span_id, app_id, environment, sdk_instance_id, service_name, timestamp_utc, sequence_id, capture_reason, call_stack_json, locals_json, serialization_metadata_json, log_id FROM ${config.database}.frame_snapshots WHERE (timestamp_utc > ? OR (timestamp_utc = ? AND sequence_id > ?)) ORDER BY timestamp_utc ASC, sequence_id ASC LIMIT ?"
         }
-        val result = connection().use { connection ->
+
+        val allFrames = connection().use { connection ->
             connection.prepareStatement(sql).use { statement ->
-                statement.setLong(1, current.timestampUtc)
-                statement.setLong(2, current.timestampUtc)
-                statement.setLong(3, current.sequenceId)
-                statement.setInt(4, count.coerceIn(1, 25))
+                statement.setLong(1, boundaryTs)
+                statement.setLong(2, boundaryTs)
+                statement.setLong(3, boundarySeq)
+                statement.setInt(4, fetchCount)
                 statement.executeQuery().use { rs ->
                     buildList {
                         while (rs.next()) {
@@ -1075,7 +1146,22 @@ internal class ClickHouseChronoStorage(
                 }
             }
         }
-        return if (direction == "backward") result.reversed() else result
+
+        // Trim to requested count
+        val resultFrames = if (direction == "backward") {
+            allFrames.reversed().take(safeCount)
+        } else {
+            allFrames.take(safeCount)
+        }
+
+        // nextCursor if we got more than requested
+        val nextCursor = if (allFrames.size > safeCount) {
+            resultFrames.lastOrNull()?.frameId
+        } else {
+            null
+        }
+
+        return StepFrameResult(resultFrames, nextCursor)
     }
 
     fun purge(selector: PurgeSelector): Map<String, String> {
@@ -1140,6 +1226,33 @@ override fun health(): StorageHealth {
             StorageHealth(storageMode = StorageMode.CLICKHOUSE, clickhouseHealthy = true)
         } catch (_: Exception) {
             StorageHealth(storageMode = StorageMode.CLICKHOUSE, clickhouseHealthy = false)
+        }
+    }
+
+    /**
+     * Queries system.events for 'RemovedByTTL' events across all tables in the
+     * configured database. ClickHouse increments this counter each time a
+     * background merge drops rows that exceeded their TTL.
+     */
+    override fun recordsDroppedDueToTtl(): Long {
+        return try {
+            connection().use { connection ->
+                connection.prepareStatement(
+                    """
+                    SELECT sum(value) AS ttl_drops
+                    FROM system.events
+                    WHERE event = 'RemovedByTTL'
+                    AND database = ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, config.database)
+                    statement.executeQuery().use { rs ->
+                        if (rs.next()) rs.getLong("ttl_drops") else 0L
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            0L
         }
     }
 
@@ -1317,6 +1430,17 @@ override fun health(): StorageHealth {
 
     private fun insertFrames(connection: Connection, frames: List<FrameSnapshot>) {
         if (frames.isEmpty()) return
+        // Validate localsJson is valid JSON before inserting any frame
+        for (frame in frames) {
+            try {
+                Json.parseToJsonElement(frame.localsJson)
+            } catch (e: Exception) {
+                throw RecordValidationException(
+                    frame.frameId,
+                    "FrameSnapshot '${frame.frameId}' has invalid localsJson: ${e.message}",
+                )
+            }
+        }
         connection.prepareStatement(
             "INSERT INTO ${config.database}.frame_snapshots (frame_id, trace_id, span_id, app_id, environment, sdk_instance_id, service_name, timestamp_utc, sequence_id, capture_reason, call_stack_json, locals_json, serialization_metadata_json, log_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).use { statement ->

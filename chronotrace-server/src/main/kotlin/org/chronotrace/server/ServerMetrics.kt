@@ -23,10 +23,14 @@ class ServerMetrics {
     private val ingestTotal = AtomicLong(0)
     private val ingestErrorsTotal = AtomicLong(0)
     private val droppedEventsTotal = AtomicLong(0)
+    private val recordsDroppedDueToTtl = AtomicLong(0)
+    private val rejectedFrames = AtomicLong(0)
 
     fun recordIngest() = ingestTotal.incrementAndGet()
     fun recordIngestError() = ingestErrorsTotal.incrementAndGet()
     fun recordDropped(count: Long = 1) = droppedEventsTotal.addAndGet(count)
+    fun recordRecordsDroppedDueToTtl(count: Long = 1) = recordsDroppedDueToTtl.addAndGet(count)
+    fun recordRejectedFrame() = rejectedFrames.incrementAndGet()
 
     // ── Active connections (gauge) ──────────────────────────────────────────
 
@@ -80,6 +84,14 @@ class ServerMetrics {
         sb.append("# HELP chronotrace_dropped_events_total Events explicitly dropped by the server (e.g. oversized batch)\n")
         sb.append("# TYPE chronotrace_dropped_events_total counter\n")
         sb.append("chronotrace_dropped_events_total $droppedEventsTotal $timestamp\n\n")
+
+        sb.append("# HELP chronotrace_records_dropped_due_to_ttl Records dropped by ClickHouse TTL retention enforcement per TTL evaluation cycle\n")
+        sb.append("# TYPE chronotrace_records_dropped_due_to_ttl counter\n")
+        sb.append("chronotrace_records_dropped_due_to_ttl $recordsDroppedDueToTtl $timestamp\n\n")
+
+        sb.append("# HELP chronotrace_rejected_frames_total FrameSnapshots rejected at ingest due to invalid localsJson\n")
+        sb.append("# TYPE chronotrace_rejected_frames_total counter\n")
+        sb.append("chronotrace_rejected_frames_total $rejectedFrames $timestamp\n\n")
 
         sb.append("# HELP chronotrace_active_connections Current number of active HTTP/WebSocket connections\n")
         sb.append("# TYPE chronotrace_active_connections gauge\n")

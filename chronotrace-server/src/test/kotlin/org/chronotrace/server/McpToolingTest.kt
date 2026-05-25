@@ -104,10 +104,11 @@ class McpToolingTest {
     }
 
     @Test
-    fun `step_frames output schema is array of FrameSnapshot`() {
+    fun `step_frames output schema is object with frames and nextCursor`() {
         val descriptor = tooling.descriptors().first { it.name == "step_frames" }
         val schema = json.parseToJsonElement(descriptor.outputSchema).jsonObject
-        assertHasType(schema, "array")
+        assertHasType(schema, "object")
+        assertHasProperties(schema, setOf("frames", "nextCursor"))
     }
 
     @Test

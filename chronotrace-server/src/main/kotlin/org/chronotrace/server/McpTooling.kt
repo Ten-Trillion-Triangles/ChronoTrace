@@ -252,33 +252,41 @@ class McpTooling(
   "properties": {
     "frameId": { "type": "string", "description": "The reference frame to step from" },
     "direction": { "type": "string", "enum": ["forward", "backward"], "description": "Direction of traversal (default: forward)", "default": "forward" },
-    "count": { "type": "integer", "description": "Number of frames to return (1-25, default 1)", "default": 1, "minimum": 1, "maximum": 25 }
+    "count": { "type": "integer", "description": "Number of frames to return (1-25, default 1)", "default": 1, "minimum": 1, "maximum": 25 },
+    "cursor": { "type": "string", "description": "Cursor from previous step_frames response (last frameId). Omit for first call." }
   },
   "required": ["frameId"],
   "additionalProperties": false
 }""",
             outputSchema = """{
-  "type": "array",
-  "description": "List of adjacent FrameSnapshot objects in temporal order, up to 'count' frames",
-  "items": {
-    "type": "object",
-    "properties": {
-      "frameId": { "type": "string" },
-      "traceId": { "type": "string" },
-      "spanId": { "type": "string" },
-      "appId": { "type": "string" },
-      "environment": { "type": "string" },
-      "sdkInstanceId": { "type": "string" },
-      "serviceName": { "type": "string" },
-      "timestampUtc": { "type": "integer" },
-      "sequenceId": { "type": "integer" },
-      "captureReason": { "type": "string" },
-      "callStack": { "type": "array" },
-      "localsJson": { "type": "string" },
-      "serializationMetadata": { "type": "object" },
-      "logId": { "type": ["string", "null"] }
+  "type": "object",
+  "description": "Paginated list of adjacent FrameSnapshot objects in temporal order",
+  "properties": {
+    "frames": {
+      "type": "array",
+      "description": "List of adjacent FrameSnapshot objects in temporal order, up to 'count' frames",
+      "items": {
+        "type": "object",
+        "properties": {
+          "frameId": { "type": "string" },
+          "traceId": { "type": "string" },
+          "spanId": { "type": "string" },
+          "appId": { "type": "string" },
+          "environment": { "type": "string" },
+          "sdkInstanceId": { "type": "string" },
+          "serviceName": { "type": "string" },
+          "timestampUtc": { "type": "integer" },
+          "sequenceId": { "type": "integer" },
+          "captureReason": { "type": "string" },
+          "callStack": { "type": "array" },
+          "localsJson": { "type": "string" },
+          "serializationMetadata": { "type": "object" },
+          "logId": { "type": ["string", "null"] }
+        },
+        "required": ["frameId", "traceId", "spanId", "appId", "environment", "sdkInstanceId", "serviceName", "timestampUtc", "sequenceId", "captureReason", "callStack", "localsJson"]
+      }
     },
-    "required": ["frameId", "traceId", "spanId", "appId", "environment", "sdkInstanceId", "serviceName", "timestampUtc", "sequenceId", "captureReason", "callStack", "localsJson"]
+    "nextCursor": { "type": ["string", "null"], "description": "Last frameId if more frames exist in this direction. Pass to next step_frames call." }
   }
 }""",
         ),
@@ -507,12 +515,14 @@ class McpTooling(
                 }
 
                 "step_frames" -> {
-                    val items = store.stepFrame(
+                    val cursor = request.arguments["cursor"]?.takeIf { it.isNotBlank() }
+                    val result = store.stepFrame(
                         frameId = request.arguments.getValue("frameId"),
                         direction = request.arguments["direction"] ?: "forward",
                         count = request.arguments["count"]?.toIntOrNull() ?: 1,
+                        cursor = cursor,
                     )
-                    ToolCallResponse(json.encodeToString(items), "Returned ${items.size} adjacent frame(s)")
+                    ToolCallResponse(json.encodeToString(result), "Returned ${result.frames.size} adjacent frame(s)")
                 }
 
                 "list_remote_rules" -> {

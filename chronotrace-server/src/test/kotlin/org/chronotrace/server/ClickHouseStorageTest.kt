@@ -343,24 +343,24 @@ class ClickHouseStorageTest {
             store.ingest(batch)
 
             // Step forward from frame-step-2
-            val forward = store.stepFrame("frame-step-2", "forward", 2)
-            assertEquals(2, forward.size, "forward step should return 2 frames")
-            assertEquals("frame-step-3", forward[0].frameId)
-            assertEquals("frame-step-4", forward[1].frameId)
+            val forward = store.stepFrame("frame-step-2", "forward", 2, null)
+            assertEquals(2, forward.frames.size, "forward step should return 2 frames")
+            assertEquals("frame-step-3", forward.frames[0].frameId)
+            assertEquals("frame-step-4", forward.frames[1].frameId)
 
             // Step backward from frame-step-3
-            val backward = store.stepFrame("frame-step-3", "backward", 2)
-            assertEquals(2, backward.size, "backward step should return 2 frames")
-            assertEquals("frame-step-1", backward[0].frameId)
-            assertEquals("frame-step-2", backward[1].frameId)
+            val backward = store.stepFrame("frame-step-3", "backward", 2, null)
+            assertEquals(2, backward.frames.size, "backward step should return 2 frames")
+            assertEquals("frame-step-1", backward.frames[0].frameId)
+            assertEquals("frame-step-2", backward.frames[1].frameId)
 
             // Boundary: stepping backward from first frame returns empty
-            val atStart = store.stepFrame("frame-step-1", "backward", 5)
-            assertTrue(atStart.isEmpty(), "no frames before the first")
+            val atStart = store.stepFrame("frame-step-1", "backward", 5, null)
+            assertTrue(atStart.frames.isEmpty(), "no frames before the first")
 
             // Boundary: stepping forward from last frame returns empty
-            val atEnd = store.stepFrame("frame-step-5", "forward", 5)
-            assertTrue(atEnd.isEmpty(), "no frames after the last")
+            val atEnd = store.stepFrame("frame-step-5", "forward", 5, null)
+            assertTrue(atEnd.frames.isEmpty(), "no frames after the last")
         }
     }
 

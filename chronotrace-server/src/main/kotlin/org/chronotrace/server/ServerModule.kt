@@ -92,6 +92,12 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             } catch (_: Exception) {
                 // queue size not available (e.g. file mode) — leave as-is
             }
+            try {
+                val ttlDrops = store.recordsDroppedDueToTtl()
+                metrics.recordRecordsDroppedDueToTtl(ttlDrops)
+            } catch (_: Exception) {
+                // TTL metrics not available — leave as-is
+            }
             call.respondText(metrics.toPrometheusFormat(), ContentType.Text.Plain)
         }
 
@@ -125,6 +131,13 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                     """{"error":"ingest_rejected","message":"${e.message?.replace("\"", "\\\"") ?: "circuit breaker open"}"}""",
                     ContentType.Application.Json,
                     HttpStatusCode.ServiceUnavailable,
+                )
+            } catch (e: RecordValidationException) {
+                store.serverMetrics.recordRejectedFrame()
+                call.respondText(
+                    """{"error":"record_validation_failed","frameId":"${e.recordId}","message":"${e.message?.replace("\"", "\\\"") ?: "invalid record"}}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
                 )
             } catch (e: Exception) {
                 metrics.recordIngestError()
@@ -161,6 +174,11 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                             call.recordAudit(store, keyId = keyId, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
                                 method = "WS", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start,
                                 appId = batch.client.appId, sdkInstanceId = batch.client.sdkInstanceId)
+                        } catch (e: RecordValidationException) {
+                            store.serverMetrics.recordRejectedFrame()
+                            send(Frame.Text("""{"error":"record_validation_failed","frameId":"${e.recordId}","message":"${e.message?.replace("\"", "\\\"") ?: "invalid record"}"}"""))
+                            call.recordAudit(store, keyId = keyId, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
+                                method = "WS", outcome = "error", statusCode = 400, durationMs = System.currentTimeMillis() - start)
                         } catch (e: Exception) {
                             metrics.recordIngestError()
                             send(Frame.Text("""{"error":"${e.message}"}"""))
