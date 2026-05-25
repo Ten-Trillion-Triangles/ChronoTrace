@@ -42,12 +42,36 @@ import org.jetbrains.kotlin.name.Name
 private const val ChronoPackage = "com.chronotrace.sdk"
 private val LoggerMethods = setOf("trace", "debug", "info", "warn", "error", "fatal")
 
+private val IrDeclaration.parentClassName: String?
+    get() = (this as? IrFunction)?.parent?.let { parent ->
+        when (parent) {
+            is IrClass -> parent.name.asString()
+            else -> null
+        }
+    }
+
 class ChronoTraceIrGenerationExtension : IrGenerationExtension {
     override fun generate(moduleFragment: IrModuleFragment, pluginContext: IrPluginContext) {
         val helperSymbols = HelperSymbols(pluginContext)
+        var totalFunctionsVisited = 0
+        var totalCallsRewritten = 0
+        val classStats = mutableMapOf<String, Pair<Int, Int>>() // className → (functionsVisited, callsRewritten)
+        var currentClassName: String? = null
+
         moduleFragment.transformChildrenVoid(
             object : IrElementTransformerVoid() {
                 private val scopeStack = ArrayDeque<LinkedHashMap<String, IrValueDeclaration>>()
+
+                override fun visitFunction(declaration: IrFunction): IrStatement {
+                    totalFunctionsVisited++
+                    currentClassName = declaration.parentClassName
+                    scopeStack.addLast(linkedMapOf<String, IrValueDeclaration>().apply {
+                        declaration.valueParameters.filter(::isVisibleLocal).forEach { put(it.name.asString(), it) }
+                    })
+                    declaration.transformChildrenVoid(this)
+                    scopeStack.removeLast()
+                    return declaration
+                }
 
                 private fun <T : IrElement> rewriteStatementContainer(
                     container: T,
@@ -67,15 +91,6 @@ class ChronoTraceIrGenerationExtension : IrGenerationExtension {
                     return container
                 }
 
-                override fun visitFunction(declaration: IrFunction): IrStatement {
-                    scopeStack.addLast(linkedMapOf<String, IrValueDeclaration>().apply {
-                        declaration.valueParameters.filter(::isVisibleLocal).forEach { put(it.name.asString(), it) }
-                    })
-                    declaration.transformChildrenVoid(this)
-                    scopeStack.removeLast()
-                    return declaration
-                }
-
                 override fun visitBlockBody(body: IrBlockBody): IrBody =
                     rewriteStatementContainer(body, body.statements)
 
@@ -87,7 +102,7 @@ class ChronoTraceIrGenerationExtension : IrGenerationExtension {
 
                 override fun visitCall(expression: IrCall): IrExpression {
                     expression.transformChildrenVoid(this)
-                    return when {
+                    val rewritten = when {
                         expression.isChronoLoggerCall() -> rewriteLoggerCall(
                             expression,
                             pluginContext,
@@ -110,9 +125,22 @@ class ChronoTraceIrGenerationExtension : IrGenerationExtension {
                         )
                         else -> expression
                     }
+                    if (rewritten !== expression) {
+                        totalCallsRewritten++
+                        val cls = currentClassName ?: "unknown"
+                        classStats[cls] = classStats.getOrDefault(cls, 0 to 0).let { (f, c) -> f to (c + 1) }
+                    }
+                    return rewritten
                 }
             },
         )
+
+        val instrumentedFns = classStats.values.sumOf { it.first }
+        val capturedLocals = classStats.values.sumOf { it.second }
+        println("ChronoTrace: $instrumentedFns functions instrumented, $capturedLocals locals captured")
+        classStats.entries.take(5).forEach { (cls, stats) ->
+            println("ChronoTrace:   $cls → ${stats.first} fns, ${stats.second} locals captured")
+        }
     }
 }
 

@@ -27,6 +27,7 @@ import org.chronotrace.contract.PurgeJob
 import org.chronotrace.contract.PurgeJobStatus
 import org.chronotrace.contract.PurgeSelector
 import org.chronotrace.contract.RemoteRule
+import org.chronotrace.contract.RemoteRuleFeedback
 import org.chronotrace.contract.RuleDeliveryConfirmation
 import org.chronotrace.contract.RuleDeliveryStatus
 import org.chronotrace.contract.SearchLogsRequest
@@ -79,6 +80,11 @@ class ChronoStore(
         val components = ChronoStoreFactory.create(options, json, serverMetrics)
         storage = components.storage
         purgeState = components.purgeState
+
+        // Validate schema version for ClickHouse storage — throws IllegalStateException on mismatch
+        if (storage is ClickHouseChronoStorage) {
+            storage.validateSchema()
+        }
 
         // Build initial key registry: start with explicit keyMetadata entries,
         // then add any apiKeys that aren't yet in metadata as unlimited client keys.
@@ -164,6 +170,15 @@ class ChronoStore(
     }
 
     override fun deleteRule(ruleId: String): Boolean = rules.remove(ruleId) != null
+
+    override fun recordRuleFeedback(feedback: RemoteRuleFeedback) {
+        val existing = rules[feedback.ruleId] ?: return
+        val updated = existing.copy(
+            triggeredCount = existing.triggeredCount + 1,
+            lastTriggeredUtc = feedback.triggeredAtUtc,
+        )
+        rules[feedback.ruleId] = updated
+    }
 
     override fun createPurgeJob(requestedBy: String, field: String, value: String): PurgeJob {
         validatePurgeSelector(field)
@@ -659,12 +674,19 @@ private class InMemoryChronoStorage(
             ordered.subList(startIndex + 1, endExclusive)
         }
 
-        // nextCursor: pass the last frameId (forward) or first frameId (backward)
-        // so the next call resumes from the correct position.
+        // nextCursor: the boundary frame that marks the edge of this page.
+        // For forward: the frame AFTER our last result (next page starts there).
+        // For backward: the frame BEFORE our first result (next page starts there).
         val nextCursor = if (direction == "backward") {
-            resultFrames.firstOrNull()?.frameId
+            // For backward: the frame BEFORE our first result is the boundary.
+            // boundaryIndex is one position before the start of resultFrames.
+            // If boundaryIndex < 0, no more frames exist in that direction.
+            val boundaryIndex = (startIndex - safeCount - 1)
+            if (boundaryIndex < 0) null else ordered[boundaryIndex].frameId
         } else {
-            resultFrames.lastOrNull()?.frameId
+            // For forward: the frame AFTER our last result is the boundary.
+            val boundaryIndex = startIndex + safeCount
+            if (boundaryIndex + 1 < ordered.size) ordered[boundaryIndex + 1].frameId else null
         }
 
         return StepFrameResult(resultFrames, nextCursor)
@@ -835,6 +857,10 @@ internal class ClickHouseChronoStorage(
 ) : ChronoStorage, Closeable {
     companion object {
         val SUPPORTED_PURGE_FIELDS = setOf("appId", "environment", "traceId", "spanId")
+        /** Current schema version. Bump on any schema-breaking change. */
+        const val SCHEMA_VERSION = 1
+        /** Maximum allowed size of a frame's localsJson field in bytes. */
+        const val MAX_LOCALS_JSON_BYTES = 512 * 1024 // 512 KB
     }
 
     // ── Bounded queue + circuit breaker ────────────────────────────────────
@@ -1352,11 +1378,81 @@ override fun health(): StorageHealth {
                         TTL toDateTime(timestamp_utc / 1000) + INTERVAL ${options.retentionDaysLogs} DAY
                         """.trimIndent(),
                     )
+                    statement.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ${config.database}.schema_version (
+                            key String,
+                            version Int,
+                            applied_at Int64
+                        )
+                        ENGINE = ReplacingMergeTree(applied_at)
+                        ORDER BY key
+                        """.trimIndent(),
+                    )
                 }
             }
         } catch (_: Exception) {
             // Bootstrap failures are non-fatal — the store is still usable if the
             // connection recovers later (e.g., ClickHouse comes back online).
+        }
+    }
+
+    /**
+     * Validates the schema_version table against the current SCHEMA_VERSION.
+     * - If no version is recorded, inserts the current version.
+     * - If version mismatches, throws IllegalStateException with details.
+     * This is called after bootstrap() and is fatal — schema mismatch prevents startup.
+     */
+    fun validateSchema() {
+        try {
+            connection().use { connection ->
+                checkSchemaVersion(connection)
+            }
+        } catch (e: IllegalStateException) {
+            throw e // Re-throw schema mismatch as-is
+        } catch (_: Exception) {
+            // Connection failures are non-fatal — the store is still usable if the
+            // connection recovers later.
+        }
+    }
+
+    /**
+     * Checks the schema_version table against the current SCHEMA_VERSION.
+     * - If no version is recorded, inserts the current version.
+     * - If version mismatches, throws IllegalStateException with details.
+     */
+    private fun checkSchemaVersion(connection: Connection) {
+        val schemaKey = "schema_version"
+        val appliedAt = System.currentTimeMillis()
+
+        // Check if a version is already recorded
+        val rs = connection.prepareStatement(
+            "SELECT version FROM ${config.database}.schema_version WHERE key = ? ORDER BY applied_at DESC LIMIT 1"
+        ).use { stmt ->
+            stmt.setString(1, schemaKey)
+            stmt.executeQuery().use { query ->
+                if (query.next()) query.getInt("version") else null
+            }
+        }
+
+        when {
+            rs == null -> {
+                // First time bootstrap — record current version
+                connection.prepareStatement(
+                    "INSERT INTO ${config.database}.schema_version (key, version, applied_at) VALUES (?, ?, ?)"
+                ).use { stmt ->
+                    stmt.setString(1, schemaKey)
+                    stmt.setInt(2, SCHEMA_VERSION)
+                    stmt.setLong(3, appliedAt)
+                    stmt.execute()
+                }
+            }
+            rs != SCHEMA_VERSION -> {
+                val msg = "Schema mismatch: contract=$SCHEMA_VERSION DB=$rs, migration required"
+                System.err.println("[ChronoTrace] ERROR: $msg")
+                throw IllegalStateException(msg)
+            }
+            // rs == SCHEMA_VERSION — all good, nothing to do
         }
     }
 
@@ -1438,6 +1534,14 @@ override fun health(): StorageHealth {
                 throw RecordValidationException(
                     frame.frameId,
                     "FrameSnapshot '${frame.frameId}' has invalid localsJson: ${e.message}",
+                )
+            }
+            // Enforce max localsJson size limit
+            val localsBytes = frame.localsJson.toByteArray(Charsets.UTF_8).size
+            if (localsBytes > MAX_LOCALS_JSON_BYTES) {
+                throw RecordValidationException(
+                    frame.frameId,
+                    "FrameSnapshot '${frame.frameId}' localsJson exceeds ${MAX_LOCALS_JSON_BYTES / 1024}KB limit (${localsBytes} bytes)",
                 )
             }
         }

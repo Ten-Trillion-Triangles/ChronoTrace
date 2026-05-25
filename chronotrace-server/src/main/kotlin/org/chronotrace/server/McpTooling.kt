@@ -11,6 +11,22 @@ class McpTooling(
     private val store: ChronoStore,
     private val json: Json,
 ) {
+    companion object {
+        /**
+         * MCP tools that count against the per-key query quota.
+         * These are read-only query operations that should be rate-limited.
+         */
+        private val queryApiKeys = setOf(
+            "search_logs",
+            "get_log",
+            "get_frame_snapshot",
+            "get_trace",
+            "step_frames",
+            "list_remote_rules",
+            "get_purge_job",
+        )
+    }
+
     fun descriptors(): List<ToolDescriptor> = listOf(
         ToolDescriptor(
             name = "search_logs",
@@ -481,7 +497,21 @@ class McpTooling(
         ),
     )
 
-    fun call(request: ToolCallRequest): ToolCallResponse {
+    fun call(request: ToolCallRequest, callerKeyId: String? = null): ToolCallResponse {
+        // Check quota before processing read-only query tools.
+        if (request.name in queryApiKeys) {
+            when (val exceeded = store.checkQuota(callerKeyId)) {
+                is QuotaExceeded -> {
+                    return ToolCallResponse(
+                        """{"error":"query budget exceeded","retryAfter":${exceeded.retryAfterSeconds}}""",
+                        "Quota exceeded for key ${callerKeyId ?: "anonymous"}",
+                        isError = true,
+                    )
+                }
+                null -> { /* quota OK, proceed */ }
+            }
+        }
+
         return try {
             when (request.name) {
                 "search_logs" -> {
