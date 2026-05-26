@@ -136,10 +136,12 @@ class StepFramePaginationTest {
                 makeFrame("f2", t0 + 20),
             ))
 
-            // cursor=f1, count=2, direction=forward → should return f2 and f3 (not f1 itself)
+            // cursor=f1, count=2, direction=forward → cursor is INCLUDED in results
+            // cursor=f1 (index 1), count=2, subStart=1, endExclusive=3 → returns [f1, f2]
             val result = store.stepFrame("ignored-frameId", "forward", 2, "f1")
-            assertEquals(1, result.frames.size)
-            assertEquals("f2", result.frames[0].frameId)
+            assertEquals(2, result.frames.size)
+            assertEquals("f1", result.frames[0].frameId)
+            assertEquals("f2", result.frames[1].frameId)
             assertNull(result.nextCursor)
         }
     }

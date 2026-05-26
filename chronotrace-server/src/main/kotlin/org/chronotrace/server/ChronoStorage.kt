@@ -2,6 +2,7 @@ package org.chronotrace.server
 
 import org.chronotrace.contract.FrameSnapshot
 import org.chronotrace.contract.IngestBatch
+import org.chronotrace.contract.IngestResponse
 import org.chronotrace.contract.LogRecord
 import org.chronotrace.contract.SearchLogsRequest
 import org.chronotrace.contract.SearchLogsResponse
@@ -15,7 +16,12 @@ data class StepFrameResult(
 )
 
 interface ChronoStorage {
-    fun ingest(batch: IngestBatch)
+    /**
+     * Ingests a batch of records with per-record validation.
+     * Malformed records are rejected individually while valid records are accepted.
+     * @return IngestResponse with lists of accepted record indices and rejected records with errors.
+     */
+    fun ingest(batch: IngestBatch): IngestResponse
     fun searchLogs(request: SearchLogsRequest): SearchLogsResponse
     fun getLog(logId: String): LogRecord?
     fun getFrame(frameId: String): FrameSnapshot?
@@ -38,8 +44,8 @@ interface ChronoStorage {
     fun countsBySelector(selector: PurgeSelector): StorageCounts
     fun health(): StorageHealth
     /**
-     * Returns the cumulative count of records dropped by ClickHouse TTL retention
-     * enforcement across all TTL evaluation cycles since server startup.
+     * Returns the cumulative count of records dropped by ClickHouse TTL retention enforcement
+     * across all TTL evaluation cycles since server startup.
      * Queries system.events for 'RemovedByTTL' events on the data database.
      * Returns 0 for non-ClickHouse storage modes.
      */

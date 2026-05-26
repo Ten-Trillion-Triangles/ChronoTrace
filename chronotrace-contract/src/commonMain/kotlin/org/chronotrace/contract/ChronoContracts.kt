@@ -159,6 +159,24 @@ data class RemoteRule(
     val createdAtUtc: Long? = null,
     /** UTC epoch millis — set when rule expires or is deleted. */
     val expiresAtUtc: Long? = null,
+    /** How many times this rule has been triggered since creation or last reset. */
+    val triggeredCount: Int = 0,
+    /** UTC epoch millis — set each time the rule fires. null if never triggered. */
+    val lastTriggeredUtc: Long? = null,
+)
+
+/**
+ * Payload for the POST /api/v1/remote-rules/feedback endpoint.
+ * The SDK calls this to report rule delivery outcome back to the server.
+ */
+@Serializable
+data class RemoteRuleFeedback(
+    val ruleId: String,
+    val appId: String,
+    val environment: String,
+    val triggeredAtUtc: Long,
+    val status: RuleDeliveryStatus,
+    val errorMessage: String? = null,
 )
 
 /**
@@ -213,6 +231,25 @@ data class IngestBatch(
     val logs: List<LogRecord> = emptyList(),
     val spans: List<SpanRecord> = emptyList(),
     val frameSnapshots: List<FrameSnapshot> = emptyList(),
+)
+
+/**
+ * Response from an ingest operation with per-record acceptance/rejection tracking.
+ * Supports partial acceptance — individual records can be rejected while others succeed.
+ */
+@Serializable
+data class IngestResponse(
+    val accepted: List<Int> = emptyList(),
+    val rejected: List<IngestRejection> = emptyList(),
+)
+
+/**
+ * Describes a single rejected record within an ingest batch.
+ */
+@Serializable
+data class IngestRejection(
+    val recordIndex: Int,
+    val error: String,
 )
 
 @Serializable

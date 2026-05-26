@@ -119,7 +119,14 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             metrics.recordIngest()
             try {
                 val batch = call.receive<IngestBatch>()
-                store.ingest(batch)
+                val response = store.ingest(batch)
+                if (response.rejected.isNotEmpty()) {
+                    val first = response.rejected.first()
+                    throw RecordValidationException(
+                        recordId = first.recordIndex.toString(),
+                        message = first.error,
+                    )
+                }
                 keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
                 call.respond(mapOf("accepted" to true))
                 call.recordAudit(store, keyId = keyId, action = "ingest", endpoint = "/api/v1/ingest",
@@ -326,6 +333,28 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             call.respond(rules)
             call.recordAudit(store, keyId = keyId, action = "list_rules", endpoint = "/api/v1/remote-rules",
                 method = "GET", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
+        }
+
+        // POST /api/v1/remote-rules/feedback — SDK reports rule delivery outcome
+        post("/api/v1/remote-rules/feedback") {
+            val authResult = call.authCheckWithKeyId(store)
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "rule_feedback", endpoint = "/api/v1/remote-rules/feedback",
+                    method = "POST", outcome = "unauthorized", statusCode = 401)
+                return@post
+            }
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@post
+
+            val start = System.currentTimeMillis()
+            val feedback = call.receive<org.chronotrace.contract.RemoteRuleFeedback>()
+            store.recordRuleFeedback(feedback)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
+            call.respond(mapOf("accepted" to true))
+            call.recordAudit(store, keyId = keyId, action = "rule_feedback", endpoint = "/api/v1/remote-rules/feedback",
+                method = "POST", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
         }
 
         post("/api/v1/purge") {

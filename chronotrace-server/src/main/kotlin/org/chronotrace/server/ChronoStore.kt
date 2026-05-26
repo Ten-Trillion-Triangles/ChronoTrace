@@ -21,6 +21,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.chronotrace.contract.FrameSnapshot
 import org.chronotrace.contract.IngestBatch
+import org.chronotrace.contract.IngestResponse
 import org.chronotrace.contract.LogLevel
 import org.chronotrace.contract.LogRecord
 import org.chronotrace.contract.PurgeJob
@@ -119,7 +120,7 @@ class ChronoStore(
         }
     }
 
-    override fun ingest(batch: IngestBatch) {
+    override fun ingest(batch: IngestBatch): IngestResponse {
         // Validate frame snapshots before handing off to any storage backend
         for (frame in batch.frameSnapshots) {
             try {
@@ -131,7 +132,7 @@ class ChronoStore(
                 )
             }
         }
-        storage.ingest(batch)
+        return storage.ingest(batch)
     }
 
     /**
@@ -605,11 +606,12 @@ private class InMemoryChronoStorage(
     private val spans = CopyOnWriteArrayList<SpanRecord>()
     private val frames = CopyOnWriteArrayList<FrameSnapshot>()
 
-    override fun ingest(batch: IngestBatch) {
+    override fun ingest(batch: IngestBatch): IngestResponse {
         logs.addAll(batch.logs)
         spans.addAll(batch.spans)
         frames.addAll(batch.frameSnapshots)
         applyRetention()
+        return IngestResponse(accepted = batch.frameSnapshots.indices.toList(), rejected = emptyList())
     }
 
     override fun searchLogs(request: SearchLogsRequest): SearchLogsResponse {
@@ -667,11 +669,19 @@ private class InMemoryChronoStorage(
         val safeCount = count.coerceIn(1, 25)
 
         val resultFrames: List<FrameSnapshot> = if (direction == "backward") {
-            val start = (startIndex - safeCount).coerceAtLeast(0)
-            ordered.subList(start, startIndex)
+            // For backward: previous N frames BEFORE the starting frame.
+            // When cursor is null, frameId is the anchor (results exclude it → end at startIndex).
+            // When cursor is non-null, cursor is the first result (results include it → start at startIndex).
+            val subEnd = if (cursor != null) (startIndex + 1).coerceAtMost(ordered.size) else startIndex
+            val subStart = (subEnd - safeCount).coerceAtLeast(0)
+            ordered.subList(subStart, subEnd)
         } else {
-            val endExclusive = (startIndex + 1 + safeCount).coerceAtMost(ordered.size)
-            ordered.subList(startIndex + 1, endExclusive)
+            // For forward: next N frames AFTER the starting frame.
+            // When cursor is null, frameId is the anchor (results exclude it → start at startIndex+1).
+            // When cursor is non-null, cursor is the first result (results include it → start at startIndex).
+            val subStart = if (cursor != null) startIndex else startIndex + 1
+            val endExclusive = (subStart + safeCount).coerceAtMost(ordered.size)
+            ordered.subList(subStart.coerceAtLeast(0), endExclusive)
         }
 
         // nextCursor: the boundary frame that marks the edge of this page.
@@ -755,12 +765,12 @@ private class FileChronoStorage(
         load()
     }
 
-    override fun ingest(batch: IngestBatch) {
+    override fun ingest(batch: IngestBatch): IngestResponse {
         lock.withLock {
             logs.addAll(batch.logs)
             spans.addAll(batch.spans)
             frames.addAll(batch.frameSnapshots)
-            delegate.ingest(
+            val result = delegate.ingest(
                 IngestBatch(
                     client = batch.client,
                     logs = batch.logs,
@@ -769,6 +779,7 @@ private class FileChronoStorage(
                 ),
             )
             persist()
+            return result
         }
     }
 
@@ -922,12 +933,14 @@ internal class ClickHouseChronoStorage(
     /** Current number of batches in the bounded queue. Used by /metrics. */
     fun queueDepth(): Int = ingestQueue?.size ?: 0
 
-    override fun ingest(batch: IngestBatch) {
+    override fun ingest(batch: IngestBatch): IngestResponse {
         if (useQueue) {
             tryOfferBatch(batch)
         } else {
             doIngestSync(batch)
         }
+        val count = batch.logs.size + batch.spans.size + batch.frameSnapshots.size
+        return IngestResponse(accepted = (0 until count).toList(), rejected = emptyList())
     }
 
     private fun doIngestSync(batch: IngestBatch) {
