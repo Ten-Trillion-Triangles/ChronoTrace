@@ -9,7 +9,7 @@ import org.chronotrace.contract.IngestBatch
  * This stub performs no network calls and discards all batches silently at runtime.
  */
 internal actual abstract class HttpTransport
-internal actual constructor(
+public actual constructor(
     baseUrl: String,
     apiKey: String,
     maxRetries: Int,

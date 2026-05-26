@@ -21,19 +21,18 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 
-internal actual class HttpTransport(
+internal actual abstract class HttpTransport
+public actual constructor(
     baseUrl: String,
     apiKey: String,
     maxRetries: Int,
 ) : ChronoTransport {
 
-    private val baseUrl: String = baseUrl
+    protected val baseUrl: String = baseUrl
     private val apiKey: String = apiKey
     private val maxRetries: Int = maxRetries
 
-    public actual override suspend fun send(batch: IngestBatch) {
-        retryableSend(batch, getIngestEndpoint())
-    }
+    public actual abstract override suspend fun send(batch: IngestBatch)
 
     private companion object {
         private const val BASE_DELAY_MS = 100L
