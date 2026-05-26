@@ -175,12 +175,21 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                         val start = System.currentTimeMillis()
                         try {
                             val batch = json.decodeFromString<IngestBatch>(frame.readText())
-                            store.ingest(batch)
-                            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
-                            send(Frame.Text("""{"accepted":true}"""))
-                            call.recordAudit(store, keyId = keyId, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
-                                method = "WS", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start,
-                                appId = batch.client.appId, sdkInstanceId = batch.client.sdkInstanceId)
+                            val response = store.ingest(batch)
+                            if (response.rejected.isNotEmpty()) {
+                                val first = response.rejected.first()
+                                store.serverMetrics.recordRejectedFrame()
+                                send(Frame.Text("""{"error":"record_validation_failed","frameId":"${first.recordIndex}","message":"${first.error.replace("\"", "\\\"")}"}"""))
+                                call.recordAudit(store, keyId = keyId, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
+                                    method = "WS", outcome = "error", statusCode = 400, durationMs = System.currentTimeMillis() - start,
+                                    appId = batch.client.appId, sdkInstanceId = batch.client.sdkInstanceId)
+                            } else {
+                                keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
+                                send(Frame.Text("""{"accepted":true}"""))
+                                call.recordAudit(store, keyId = keyId, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
+                                    method = "WS", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start,
+                                    appId = batch.client.appId, sdkInstanceId = batch.client.sdkInstanceId)
+                            }
                         } catch (e: RecordValidationException) {
                             store.serverMetrics.recordRejectedFrame()
                             send(Frame.Text("""{"error":"record_validation_failed","frameId":"${e.recordId}","message":"${e.message?.replace("\"", "\\\"") ?: "invalid record"}"}"""))
