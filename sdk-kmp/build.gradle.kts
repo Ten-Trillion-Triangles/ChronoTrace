@@ -32,6 +32,20 @@ kotlin {
             implementation(kotlin("test"))
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
         }
+        named("jvmMain") {
+            dependencies {
+                implementation("io.ktor:ktor-client-core:2.3.12")
+                implementation("io.ktor:ktor-client-okhttp:2.3.12")
+                implementation("com.squareup.okhttp3:okhttp:4.12.0")
+            }
+        }
+        named("jvmTest") {
+            dependencies {
+                implementation(kotlin("test-junit5"))
+                implementation("com.squareup.okhttp3:okhttp:4.12.0")
+                implementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+            }
+        }
         named("jsTest") {
             dependencies {
                 implementation(kotlin("test-js"))

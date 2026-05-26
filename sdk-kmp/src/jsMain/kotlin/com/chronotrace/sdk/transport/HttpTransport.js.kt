@@ -4,8 +4,7 @@ import com.chronotrace.sdk.ChronoTransport
 import org.chronotrace.contract.IngestBatch
 
 /**
- * WasmJs HttpTransport — browser/network operations are not available in Kotlin/Wasm.
- * Network calls require a full HTTP client library with Kotlin/Wasm support (e.g. ktor-client-wasm).
+ * JS HttpTransport — network operations in JavaScript require a proper HTTP client.
  * This stub performs no network calls and discards all batches silently at runtime.
  */
 internal actual abstract class HttpTransport

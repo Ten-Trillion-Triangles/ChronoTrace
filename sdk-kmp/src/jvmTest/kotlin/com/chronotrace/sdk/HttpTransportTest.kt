@@ -1,8 +1,6 @@
 package com.chronotrace.sdk
 
-import com.chronotrace.sdk.transport.HttpTransport
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -35,7 +33,7 @@ class HttpTransportTest {
         server.start()
         server.enqueue(MockResponse().setResponseCode(200))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
         )
@@ -59,7 +57,7 @@ class HttpTransportTest {
         server.start()
         server.enqueue(MockResponse().setResponseCode(200))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "my-api-key",
         )
@@ -81,7 +79,7 @@ class HttpTransportTest {
         server.start()
         server.enqueue(MockResponse().setResponseCode(200))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "secret-key-123",
         )
@@ -103,7 +101,7 @@ class HttpTransportTest {
         server.start()
         server.enqueue(MockResponse().setResponseCode(200))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
         )
@@ -123,7 +121,7 @@ class HttpTransportTest {
         server.start()
         server.enqueue(MockResponse().setResponseCode(201))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
         )
@@ -142,7 +140,7 @@ class HttpTransportTest {
         server.start()
         server.enqueue(MockResponse().setResponseCode(500))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
         )
@@ -172,7 +170,7 @@ class HttpTransportTest {
         }
         server.enqueue(MockResponse().setResponseCode(200))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
             maxRetries = 3,
@@ -198,7 +196,7 @@ class HttpTransportTest {
             server.enqueue(MockResponse().setResponseCode(503))
         }
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
             maxRetries = 2,
@@ -231,7 +229,7 @@ class HttpTransportTest {
             server.enqueue(MockResponse().setResponseCode(503))
         }
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
         )
@@ -260,7 +258,7 @@ class HttpTransportTest {
         server.start()
         server.enqueue(MockResponse().setResponseCode(200))
 
-        val transport = HttpTransport(
+        val transport = TestHttpTransport(
             baseUrl = server.url("/").toString(),
             apiKey = "test-key",
         )
