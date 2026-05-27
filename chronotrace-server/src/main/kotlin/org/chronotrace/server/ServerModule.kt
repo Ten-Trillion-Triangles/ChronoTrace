@@ -82,22 +82,10 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         // ── Public endpoints (no auth, no quota, no audit) ─────────────────
 
         get("/health") {
-            val authResult = call.authCheckWithKeyId(store)
-            if (authResult == null) {
-                // none mode — continue without auth
-            } else if (!authResult.first) {
-                return@get
-            }
             call.respond(store.health())
         }
 
         get("/metrics") {
-            val authResult = call.authCheckWithKeyId(store)
-            if (authResult == null) {
-                // none mode — continue without auth
-            } else if (!authResult.first) {
-                return@get
-            }
             try {
                 val queueDepth = store.queueSize()
                 metrics.setQueueSize(queueDepth)
