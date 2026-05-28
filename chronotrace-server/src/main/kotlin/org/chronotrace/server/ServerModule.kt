@@ -82,7 +82,47 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         // ── Public endpoints (no auth, no quota, no audit) ─────────────────
 
         get("/health") {
-            call.respond(store.health())
+            val health = store.health()
+            // Return 503 when ClickHouse is explicitly unhealthy (configured but unreachable)
+            val isDegraded = health.clickhouseHealthy == false || health.valkeyHealthy == false
+            if (isDegraded) {
+                call.respond(HttpStatusCode.ServiceUnavailable, health)
+            } else {
+                call.respond(health)
+            }
+        }
+
+        get("/ready") {
+            val health = store.health()
+            val readyChecks = buildJsonObject {
+                put("storage", JsonPrimitive(health.storageMode))
+                // ClickHouse is required if configured
+                val chRequired = health.clickhouseHealthy != null
+                val chHealthy = health.clickhouseHealthy != false
+                put("clickhouse", buildJsonObject {
+                    put("configured", JsonPrimitive(chRequired))
+                    put("healthy", JsonPrimitive(chHealthy))
+                })
+                // Valkey is for purge queue - if not healthy, system can still function but purge won't work
+                val valkeyRequired = health.valkeyHealthy != null
+                val valkeyHealthy = health.valkeyHealthy != false
+                put("valkey", buildJsonObject {
+                    put("configured", JsonPrimitive(valkeyRequired))
+                    put("healthy", JsonPrimitive(valkeyHealthy))
+                })
+            }
+            val isReady = health.clickhouseHealthy != false
+            if (isReady) {
+                call.respond(buildJsonObject {
+                    put("ready", JsonPrimitive(true))
+                    put("checks", readyChecks)
+                })
+            } else {
+                call.respond(HttpStatusCode.ServiceUnavailable, buildJsonObject {
+                    put("ready", JsonPrimitive(false))
+                    put("checks", readyChecks)
+                })
+            }
         }
 
         get("/metrics") {
@@ -717,6 +757,18 @@ fun Application.chronoTraceModule() {
             )
         },
     )
+    val errors = ConfigValidator.validateAll(
+        authMode = authMode,
+        storageMode = storageMode,
+        dataDir = options.dataDir,
+        clickHouse = options.clickHouse,
+    )
+    if (errors.isNotEmpty()) {
+        System.err.println("[ChronoTrace] Startup configuration validation failed:")
+        errors.forEach { System.err.println("  - $it") }
+        throw IllegalStateException("ChronoTrace startup validation failed: ${errors.joinToString("; ")}")
+    }
+
     chronoTraceModule(ChronoStore(authMode, options))
 }
 
