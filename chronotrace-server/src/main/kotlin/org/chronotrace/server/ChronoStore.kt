@@ -47,6 +47,41 @@ class IngestRejectedException(message: String, cause: Throwable? = null) : Runti
  */
 class RecordValidationException(val recordId: String, message: String) : RuntimeException(message)
 
+/**
+ * Thrown when the underlying storage (e.g. ClickHouse) fails an ingest operation.
+ * The HTTP layer catches this and returns 503 Service Unavailable with a structured error.
+ */
+class StorageException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+/** Structured error response returned by the server. */
+@kotlinx.serialization.Serializable
+data class StructuredErrorResponse(
+    val error: String,
+    val code: String,
+    val details: Map<String, String> = emptyMap(),
+)
+
+/** Creates a structured error response for a 400 Bad Request. */
+fun badRequestError(message: String, details: Map<String, String> = emptyMap()) = StructuredErrorResponse(
+    error = message,
+    code = "BAD_REQUEST",
+    details = details,
+)
+
+/** Creates a structured error response for a 503 Service Unavailable. */
+fun serviceUnavailableError(message: String, details: Map<String, String> = emptyMap()) = StructuredErrorResponse(
+    error = message,
+    code = "SERVICE_UNAVAILABLE",
+    details = details,
+)
+
+/** Creates a structured error response for a 500 Internal Server Error. */
+fun internalServerError(message: String, details: Map<String, String> = emptyMap()) = StructuredErrorResponse(
+    error = message,
+    code = "INTERNAL_ERROR",
+    details = details,
+)
+
 class ChronoStore(
     val authMode: String,
     val options: ChronoStoreOptions = ChronoStoreOptions(),
@@ -132,7 +167,23 @@ class ChronoStore(
                 )
             }
         }
-        return storage.ingest(batch)
+        return try {
+            storage.ingest(batch)
+        } catch (e: RecordValidationException) {
+            throw e // Re-throw validation exceptions with full details
+        } catch (e: Exception) {
+            // Wrap storage failures in a structured way for the HTTP layer
+            throw StorageException("Storage ingest failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Returns the approximate queue depth for the bounded ingest queue.
+     * Used by /metrics and health checks.
+     */
+    fun queueDepth(): Int {
+        val storage0 = storage
+        return if (storage0 is ClickHouseChronoStorage) storage0.queueDepth() else 0
     }
 
     /**
