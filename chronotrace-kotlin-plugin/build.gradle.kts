@@ -15,8 +15,9 @@ dependencies {
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.0")
     testImplementation("org.mockito:mockito-core:5.14.2")
     testImplementation("org.mockito:mockito-subclass:5.14.2")
-    testImplementation("com.github.nhaarman:mockito-kotlin:4.1.0")
     testCompileOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.2.21")
+    testRuntimeOnly("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.2.21")
+    testImplementation(gradleTestKit())
 }
 
 tasks.withType<Test>().configureEach {
