@@ -1,9 +1,9 @@
 # ChronoTrace User Manual
 
-ChronoTrace is a distributed tracing and observability platform with three components:
+ChronoTrace captures structured logs and local variable state so that LLMs can debug code after execution. It has three components:
 
 - **Tracing SDKs** — Kotlin Multiplatform (JVM/JS/Wasm) and TypeScript (Node.js/browser) libraries that capture logs, spans, and frame snapshots (local variable state)
-- **Server** — Kotlin/Ktor backend that ingests, stores, and serves trace data (file-based or ClickHouse)
+- **Server** — Kotlin/Ktor backend that ingests, stores, and serves trace data (file-based or ClickHouse), enabling LLMs to query debugging context across distributed services
 - **MCP Server** — Model Context Protocol interface exposing trace query tools for AI integration
 
 This guide covers SDK integration for all supported platforms, server configuration, and MCP tool usage.
@@ -35,14 +35,14 @@ Add the Gradle dependency to your `build.gradle.kts`:
 
 ```kotlin
 plugins {
-    kotlin("multiplatform") version "2.1.0"
+    kotlin("multiplatform") version "2.2.21"
 }
 
 kotlin {
     sourceSets {
         commonMain {
             dependencies {
-                implementation("com.chronotrace:sdk-kmp:0.1.0")
+                implementation("com.chronotrace:sdk-kmp:1.0.0")
             }
         }
     }
@@ -53,7 +53,7 @@ For the Gradle plugin that enables automatic local variable capture (Kotlin/JVM 
 
 ```kotlin
 plugins {
-    id("com.chronotrace.kotlin-plugin") version "0.1.0"
+    id("org.chronotrace.kotlin-plugin") version "1.0.0"
 }
 ```
 
@@ -231,9 +231,9 @@ suspend fun manualSpan() {
 }
 ```
 
-### Automatic Frame Capture with the Kotlin Plugin
+### Automatic Local Variable Capture with the Kotlin Plugin
 
-When the `chronotrace-kotlin-plugin` Gradle plugin is applied (JVM only), the compiler plugin injects local variable capture automatically at `withTrace` and `withSpan` call sites. All local variables within the block are serialized into the frame snapshot:
+Frame snapshots (call stack + variable values) are captured on **all supported platforms** — JVM, JS, and Wasm — via `autoCaptureLevels` or explicit `captureLocals` passed to `withTrace`/`withSpan`. However, the compiler plugin provides true automatic injection: it inspects the bytecode and injects local variable capture directly at `withTrace` and `withSpan` call sites without requiring you to pass `captureLocals` manually. This bytecode inspection is **JVM only**.
 
 ```kotlin
 // Gradle:
@@ -250,7 +250,7 @@ withTrace("processPayment") {
 }
 ```
 
-Without the plugin, local variables are not captured unless you pass them explicitly via `captureLocals` in the options parameter (see the TypeScript section for the pattern).
+On non-JVM platforms (JS/Wasm), or on JVM without the plugin, local variables are captured only when you pass them explicitly via `captureLocals` in the options parameter (see the TypeScript section for the pattern).
 
 ### Context Propagation
 
@@ -952,7 +952,7 @@ Returns:
 {
   "status": "ok",
   "storageMode": "clickhouse",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "uptimeSeconds": 86400
 }
 ```
@@ -974,7 +974,7 @@ docker compose up -d  # starts ClickHouse + server
 npm install @chronotrace/sdk-ts
 
 # Kotlin Multiplatform
-// Add to build.gradle.kts: implementation("com.chronotrace:sdk-kmp:0.1.0")
+// Add to build.gradle.kts: implementation("com.chronotrace:sdk-kmp:1.0.0")
 ```
 
 **3. Initialize and log:**

@@ -1,8 +1,8 @@
-# ChronoTrace v0.1.0 Release Notes
+# ChronoTrace v1.0.0 Release Notes
 
-**Released: 2026-05-16**
+**Released: 2026-05-27**
 
-ChronoTrace is an AI-native temporal logging framework. v0.1.0 is the first feature-complete baseline, delivering the full ingest/query/trace pipeline with SDK support for TypeScript and Kotlin Multiplatform, a persistent ClickHouse/Valkey backend, MCP agent interfaces, and production-grade auth and hardening hooks.
+ChronoTrace is an AI-native temporal logging framework. v1.0.0 is the first feature-complete baseline, delivering the full ingest/query/trace pipeline with SDK support for TypeScript and Kotlin Multiplatform, a persistent ClickHouse/Valkey backend, MCP agent interfaces, and production-grade auth and hardening hooks.
 
 ---
 
@@ -35,7 +35,7 @@ ChronoTrace is an AI-native temporal logging framework. v0.1.0 is the first feat
 
 ### Kotlin Multiplatform SDK (`com.chronotrace:sdk-kmp`)
 
-- **Multiplatform targets**: JVM, JS (Node), and Wasm (Node). Maven coordinates `com.chronotrace:sdk-kmp:0.1.0`.
+- **Multiplatform targets**: JVM, JS (Node), and Wasm (Node). Maven coordinates `com.chronotrace:sdk-kmp:1.0.0`.
 - **Same trace/span APIs**: `withTrace`, `withSpan`, `startSpan`/`end` on all targets.
 - **Coroutine-aware context propagation**: `ChronoContextElement` implements `CoroutineContext.Element` so trace context flows through `StructuredTaskScope` and kotlinx-coroutines automatically.
 - **Frame snapshot capture**: Both auto-capture (linked) and manual capture paths emit `FrameSnapshot` payloads with structured locals, call stack, and serialization metadata.
@@ -48,7 +48,7 @@ ChronoTrace is an AI-native temporal logging framework. v0.1.0 is the first feat
 
 ## Verification
 
-All of the following pass on v0.1.0:
+All of the following pass on v1.0.0:
 
 ```
 ./gradlew test
@@ -75,10 +75,10 @@ cd sdk-ts && npm run check:contracts && npm test && npm run build
 
 | Artifact | Coordinates |
 |---|---|
-| Server | Docker: `chronotrace-server:0.1.0` (built from `chronotrace-server/Dockerfile`) |
-| TS SDK | npm: `@chronotrace/sdk-ts@0.1.0` |
-| KMP SDK | Maven: `com.chronotrace:sdk-kmp:0.1.0` |
-| KMP Gradle plugin | `com.chronotrace:chronotrace-kotlin-plugin-gradle:0.1.0` |
+| Server | Docker: `chronotrace-server:1.0.0` (built from `chronotrace-server/Dockerfile`) |
+| TS SDK | npm: `@chronotrace/sdk-ts@1.0.0` |
+| KMP SDK | Maven: `com.chronotrace:sdk-kmp:1.0.0` |
+| KMP Gradle plugin | `com.chronotrace:chronotrace-kotlin-plugin-gradle:1.0.0` |
 
 ---
 
@@ -106,7 +106,7 @@ cd sdk-ts && npm run check:contracts && npm test && npm run build
 
 ## Hardening Notes for Production
 
-v0.1.0 ships with the following production hooks in place. Full checklist at `specs/hardening-checklist.md`.
+v1.0.0 ships with the following production hooks in place. Full checklist at `specs/hardening-checklist.md`.
 
 - **TLS**: ChronoTrace server does not terminate TLS natively. Deploy behind a reverse proxy (Caddy, nginx, Traefik, or cloud LB) that terminates TLS 1.2+. WebSocket ingest (`WS /api/v1/ingest/ws`) requires `Sec-WebSocket-Protocol: json` and WSS termination at the proxy.
 - **Secrets**: All secrets (ClickHouse password, Valkey password, API keys, bearer tokens) must be injected via environment variables at runtime. Never bake secrets into Docker images.
@@ -117,9 +117,9 @@ v0.1.0 ships with the following production hooks in place. Full checklist at `sp
 
 ---
 
-## What's Not in v0.1.0
+## What's Not in v1.0.0
 
-The following are deferred to v0.2.0:
+The following are deferred to v1.1.0:
 
 - **Kafka ingest buffering**: Whether Kafka is required for spec completion is still under evaluation. See `specs/kafka-decision.md`.
 - **Per-key quota tracking and key management endpoints**: Auth hardening (per-key quota, audit logging, key CRUD) is v0.2.0 scope.
@@ -132,9 +132,9 @@ The following are deferred to v0.2.0:
 
 ## Migration Notes
 
-v0.1.0 is the first feature-complete baseline. There is no prior stable release to migrate from.
+v1.0.0 is the first feature-complete baseline. There is no prior stable release to migrate from.
 
-For users evaluating the v0.1.0 alpha:
+For users evaluating the v1.0.0 alpha:
 
 1. Run `./gradlew test` and `DOCKER_AVAILABLE=true ./gradlew :chronotrace-server:test` to validate your environment.
 2. Start the stack with `docker compose up -d` (requires `CHRONOTRACE_STORAGE_MODE=clickhouse` and ClickHouse/Valkey reachable).

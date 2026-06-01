@@ -1,17 +1,17 @@
 # ChronoTrace
 
-AI-native temporal logging with frame-level local variable capture. Capture logs, spans, and variable state across distributed services — then query it via HTTP REST, WebSocket, or MCP.
+AI-native structured logging that captures local variable state so LLMs can debug code after execution. Capture logs, spans, and frame snapshots across distributed services — then query via HTTP REST, WebSocket, or MCP.
 
 ## What it does
 
-ChronoTrace captures rich debugging context (logs, call stacks, local variables) in application code and serves it through multiple interfaces. The key differentiator is **frame snapshots** — capturing local variable state at any point in the call stack, not just entry/exit boundaries.
+ChronoTrace captures structured logs and local variable snapshots (frame snapshots) so that an LLM can reproduce and understand exactly what happened during code execution. The key differentiator is **frame snapshots** — capturing local variable state at any point in the call stack, not just entry/exit boundaries — giving LLMs the context they need to debug code after the fact.
 
 ## Repository structure
 
 ```
 chronotrace-contract/          # Shared Kotlin data contracts (serialization)
-chronotrace-server/             # Ktor server (ingest, query, MCP tooling, metrics)
-sdk-kmp/                        # Kotlin Multiplatform SDK (JVM/JS/Wasm)
+chronotrace-server/             # Ktor server (ingest, query, MCP tooling for LLM access)
+sdk-kmp/                        # Kotlin Multiplatform SDK (JVM/JS/Wasm) for capturing logs and frame snapshots
 sdk-ts/                         # TypeScript SDK (Node.js + browser)
 chronotrace-kotlin-plugin/     # K2 compiler IR plugin for local variable injection
 chronotrace-kotlin-plugin-gradle/  # Gradle plugin that applies the compiler plugin
@@ -24,14 +24,14 @@ chronotrace-kotlin-plugin-gradle/  # Gradle plugin that applies the compiler plu
 | Kotlin SDK (JVM) | Java 17+ runtime |
 | Kotlin SDK (JS/Wasm) | Node.js 18+ |
 | TypeScript SDK | Node.js 18+, npm 10+ |
-| Server (dev) | Java 25+, Gradle 8.x |
+| Server (dev) | Java 21+ (required for build; Kotlin2.2.21 crashes on JDK 25+), Gradle 8.x |
 | Server (Docker) | Docker + Docker Compose |
 | ClickHouse storage | ClickHouse 25.x (via Docker Compose) |
 | Valkey purge state | Valkey/Redis 8.x (via Docker Compose) |
 
 ## Version
 
-Current: **0.1.0-SNAPSHOT**
+Current: **1.0.0**
 
 Published to Maven Local via `gradle :sdk-kmp:publishToMavenLocal`.
 
@@ -42,6 +42,8 @@ Published to Maven Local via `gradle :sdk-kmp:publishToMavenLocal`.
 ```bash
 ./gradlew build
 ```
+
+> **Full build and installation instructions:** See [docs/install.md](docs/install.md) for building from source, running the server in all storage modes, and running tests.
 
 ### 2. Run the server
 
@@ -95,11 +97,13 @@ plugins {
 }
 
 dependencies {
-    implementation("com.chronotrace:sdk-kmp-jvm:0.1.0-SNAPSHOT")
+    implementation("com.chronotrace:sdk-kmp-jvm:1.0.0")
 }
 ```
 
 ### Initialize and emit logs
+
+> **SDK API reference:** Full API details (ChronoConfig, ChronoLogger, ChronoTrace, transport interfaces) are documented in [docs/sdk-api.md](docs/sdk-api.md).
 
 ```kotlin
 import com.chronotrace.sdk.ChronoTrace
@@ -193,7 +197,7 @@ const result = await withSpan('process-payment', { orderId: 'ORD-789' }, async (
 | Method | Path | Description |
 |---------|------|-------------|
 | POST | `/api/v1/ingest` | Ingest logs, spans, frame snapshots (HTTP) |
-| POST | `/api/v1/ingest/ws` | Ingest via WebSocket |
+| WS (WebSocket) | `/api/v1/ingest/ws` | Streaming ingest via WebSocket |
 | POST | `/api/v1/logs/search` | Search logs with filters |
 | GET | `/api/v1/traces/{traceId}` | Retrieve full trace |
 | POST | `/api/v1/remote-rules` | Create/update remote rules |
@@ -203,18 +207,18 @@ const result = await withSpan('process-payment', { orderId: 'ORD-789' }, async (
 | GET/POST | `/api/v1/admin/keys` | Manage API keys |
 | GET | `/api/v1/admin/audit/logs` | Query audit trail |
 
-MCP server: 11 tools exposed at `mcp/v1` (search_logs, get_log, get_frame_snapshot, get_trace, step_frames, list_remote_rules, upsert_remote_rule, delete_remote_rule, create_purge_job, get_purge_job, get_system_health).
+MCP server: 11 tools exposed at `POST /mcp` (search_logs, get_log, get_frame_snapshot, get_trace, step_frames, list_remote_rules, upsert_remote_rule, delete_remote_rule, create_purge_job, get_purge_job, get_system_health).
 
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHRONOTRACE_AUTH_MODE` | `none` | `none`, `apiKey`, or `bearer` |
-| `CHRONOTRACE_STORAGE_MODE` | `inMemory` | `inMemory`, `file`, or `clickhouse` |
+| `CHRONOTRACE_STORAGE_MODE` | `file` | `inMemory`, `file`, or `clickhouse` |
 | `CHRONOTRACE_DATA_DIR` | — | Path for file storage |
 | `CHRONOTRACE_CLICKHOUSE_JDBC_URL` | — | JDBC URL for ClickHouse |
 | `CHRONOTRACE_VALKEY_HOST` | — | Host for Valkey (purge job state) |
-| `CHRONOTRACE_PORT` | `8080` | Server listen port |
+| `PORT` | `8080` | Server listen port |
 
 ## Build artifacts
 

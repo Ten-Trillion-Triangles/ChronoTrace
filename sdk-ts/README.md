@@ -1,6 +1,6 @@
 # ChronoTrace SDK for TypeScript
 
-**Version:** 0.1.0
+**Version:** 1.0.0
 
 AI-native temporal logging SDK for TypeScript and JavaScript environments. Trace, log, instrument — with context propagation, redaction rules, and transport flexibility.
 
@@ -137,4 +137,4 @@ auth: { mode: "mTLS", clientCertificateAlias: "chronotrace-client" }
 
 ## License
 
-Apache-2.0
+MIT
