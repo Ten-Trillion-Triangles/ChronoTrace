@@ -5,9 +5,13 @@ plugins {
     id("io.ktor.plugin") version "3.1.1" apply false
 }
 
+// Single source of truth for ChronoTrace version.
+// Set via gradle.properties CHRONOTRACE_VERSION; do not hardcode in subprojects.
+val chronoTraceVersion: String = providers.gradleProperty("CHRONOTRACE_VERSION").get()
+
 allprojects {
     group = "com.chronotrace"
-    version = "0.1.0-SNAPSHOT"
+    version = chronoTraceVersion
 
     repositories {
         mavenCentral()

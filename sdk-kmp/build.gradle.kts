@@ -20,6 +20,8 @@ kotlin {
         browser()
         nodejs()
     }
+    linuxX64()
+    macosX64()
 
     sourceSets {
         commonMain.dependencies {
@@ -34,8 +36,8 @@ kotlin {
         }
         named("jvmMain") {
             dependencies {
-                implementation("io.ktor:ktor-client-core:2.3.12")
-                implementation("io.ktor:ktor-client-okhttp:2.3.12")
+                implementation("io.ktor:ktor-client-core:3.1.1")
+                implementation("io.ktor:ktor-client-okhttp:3.1.1")
                 implementation("com.squareup.okhttp3:okhttp:4.12.0")
             }
         }
@@ -46,14 +48,60 @@ kotlin {
                 implementation("com.squareup.okhttp3:mockwebserver:4.12.0")
             }
         }
+        named("jsMain") {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+                implementation("io.ktor:ktor-client-core:3.1.1")
+                implementation("io.ktor:ktor-client-js:3.1.1")
+            }
+        }
         named("jsTest") {
             dependencies {
                 implementation(kotlin("test-js"))
             }
         }
+        named("wasmJsMain") {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+                implementation("io.ktor:ktor-client-core:3.1.1")
+                implementation("io.ktor:ktor-client-js:3.1.1")
+            }
+        }
         named("wasmJsTest") {
             dependencies {
                 implementation(kotlin("test-wasm-js"))
+            }
+        }
+        named("linuxX64Main") {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+                implementation("io.ktor:ktor-client-core:3.1.1")
+                implementation("io.ktor:ktor-client-cio:3.1.1")
+            }
+        }
+        named("macosX64Main") {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+                implementation("io.ktor:ktor-client-core:3.1.1")
+                implementation("io.ktor:ktor-client-cio:3.1.1")
+            }
+        }
+        named("linuxX64Test") {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(kotlin("test-common"))
+                implementation(kotlin("test-annotations-common"))
+            }
+        }
+        named("macosX64Test") {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(kotlin("test-common"))
+                implementation(kotlin("test-annotations-common"))
             }
         }
     }
@@ -65,6 +113,8 @@ publishing {
             "jvm" -> "sdk-kmp-jvm"
             "js" -> "sdk-kmp-js"
             "wasmJs" -> "sdk-kmp-wasm"
+            "linuxX64" -> "sdk-kmp-linux-x64"
+            "macosX64" -> "sdk-kmp-macos-x64"
             else -> artifactId
         }
     }
@@ -78,16 +128,38 @@ tasks.withType<Test>().configureEach {
     tasks.findByName("generatePomFileForWasmJsPublication")?.let { dependsOn(it) }
 }
 
-val chronoTraceCompilerPluginJar = rootProject.project(":chronotrace-kotlin-plugin").tasks.named("jar", Jar::class.java)
-
 tasks.withType(KotlinCompilationTask::class.java).configureEach {
-    dependsOn(chronoTraceCompilerPluginJar)
-    compilerOptions.freeCompilerArgs.addAll(
-        project.provider {
-            listOf(
-                "-Xplugin=${chronoTraceCompilerPluginJar.get().archiveFile.get().asFile.absolutePath}",
-                "-Xexpect-actual-classes",
-            )
-        },
-    )
+    doFirst {
+        try {
+            val taskName = name
+            // Skip Native compileKotlin tasks: the JVM K2 IR plugin JAR cannot instrument
+            // Native targets (Kotlin/Native has its own IR pipeline). Injecting it would
+            // add `-Xplugin=...` flags the Native compiler silently ignores, and it makes
+            // the build slower.
+            if (taskName.contains("linuxX64") || taskName.contains("macosX64")) {
+                return@doFirst
+            }
+            val targetProjectName = when {
+                taskName.contains("wasmJs") -> ":chronotrace-kotlin-plugin-wasm"
+                taskName.contains("Js") && !taskName.contains("WasmJs") -> ":chronotrace-kotlin-plugin-js"
+                else -> ":chronotrace-kotlin-plugin"
+            }
+            val pluginProject = project.rootProject.project(targetProjectName)
+            val pluginJar = pluginProject.tasks.named("jar", Jar::class.java).get().archiveFile.get().asFile
+            if (pluginJar.exists()) {
+                dependsOn(pluginProject.tasks.named("jar"))
+                compilerOptions.freeCompilerArgs.addAll(
+                    listOf(
+                        "-Xplugin=${pluginJar.absolutePath}",
+                        "-Xexpect-actual-classes",
+                        "-Xsuppress-warning=DEPRECATION",
+                    )
+                )
+            } else {
+                logger.warn("ChronoTrace plugin JAR not found at ${pluginJar.absolutePath}. Build continues without instrumentation.")
+            }
+        } catch (e: Exception) {
+            logger.warn("ChronoTrace plugin failed to load: ${e.message}. Build continues without instrumentation.")
+        }
+    }
 }

@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 plugins {
     kotlin("multiplatform")
     kotlin("plugin.serialization")
+    `maven-publish`
 }
 
 @OptIn(ExperimentalWasmDsl::class)
@@ -16,6 +17,8 @@ kotlin {
         browser()
         nodejs()
     }
+    linuxX64()
+    macosX64()
 
     sourceSets {
         commonMain.dependencies {
@@ -26,6 +29,9 @@ kotlin {
         }
     }
 }
+
+group = "com.chronotrace"
+version = rootProject.version
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
@@ -51,4 +57,8 @@ tasks.register<JavaExec>("verifyTypeScriptContracts") {
     mainClass.set("org.chronotrace.contract.TypeScriptContractGeneratorKt")
     classpath = files(jvmMainCompilation.output.allOutputs, jvmMainCompilation.runtimeDependencyFiles)
     args("--check", generatedTsContracts.asFile.absolutePath)
+}
+
+tasks.named("check") {
+    dependsOn("verifyTypeScriptContracts")
 }

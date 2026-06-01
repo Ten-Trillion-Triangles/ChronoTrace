@@ -1,9 +1,58 @@
+# Gradle
 .gradle/
 .kotlin/
 build/
+out/
 dist/
+.kotlin-cache/
+.kotlin-bundled/
+
+# Node
 node_modules/
+npm-debug.log*
+yarn-error.log
+.yarn/
+.pnp.*
+
+# IDE / editor
 .idea/
-.DS_Store
+.vscode/
 *.iml
+.DS_Store
+
+# OS / misc
+*.swp
+*~
+.tmp/
+
+# Scratch / placeholder
 .codex
+.hermes/
+accelbyte-sdk/
+bui/
+tube/
+md/
+tstep-enhancements/
+
+# Build artifacts
+*.bak
+*.tgz
+*.tar.gz
+*.zip
+*.klib
+hs_err_pid*.log
+token_response.kt
+TStep-Code-Index-Enhancement-Plan.md
+
+# Local config
+.claude/
+.local/
+*.local
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+keystore.jks
+truststore.jks
