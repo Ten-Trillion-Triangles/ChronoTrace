@@ -61,15 +61,19 @@ class ChronoTraceWasmPluginE2eTest {
         private val workspaceRoot: String = findWorkspaceRoot()
 
         private fun findWorkspaceRoot(): String {
-            var dir = File(System.getProperty("user.dir"))
+            // Allow override via -Dchronotrace.workspace.root=/path/to/repo
+            System.getProperty("chronotrace.workspace.root")?.let { return it }
+            var dir: File? = File(System.getProperty("user.dir"))
             while (dir != null) {
                 val settings = dir.resolve("settings.gradle.kts")
-                if (settings.exists() && settings.readText().contains("chronotrace-kotlin-plugin-gradle")) {
+                if (settings.exists() &&
+                    settings.readText().contains("chronotrace-kotlin-plugin-gradle")) {
                     return dir.absolutePath
                 }
                 dir = dir.parentFile
             }
-            return "/home/cage/Desktop/Workspaces/ChronoTrace"
+            error("Could not find ChronoTrace workspace root. " +
+                  "Run from the project root, or set -Dchronotrace.workspace.root=/path/to/repo")
         }
 
         @BeforeAll

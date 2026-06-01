@@ -23,16 +23,22 @@ class ChronoTraceIrGenerationExtensionGracefulDegradationTest {
 
     private lateinit var testProjectDir: Path
 
-    private val workspaceRoot: String by lazy {
-        var dir = File(System.getProperty("user.dir"))
+    private val workspaceRoot: String by lazy { discoverWorkspaceRoot() }
+
+    private fun discoverWorkspaceRoot(): String {
+        // Allow override via -Dchronotrace.workspace.root=/path/to/repo
+        System.getProperty("chronotrace.workspace.root")?.let { return it }
+        var dir: File? = File(System.getProperty("user.dir"))
         while (dir != null) {
             val settings = dir.resolve("settings.gradle.kts")
-            if (settings.exists() && settings.readText().contains("chronotrace-kotlin-plugin-gradle")) {
-                return@lazy dir.absolutePath
+            if (settings.exists() &&
+                settings.readText().contains("chronotrace-kotlin-plugin-gradle")) {
+                return dir.absolutePath
             }
             dir = dir.parentFile
         }
-        "/home/cage/Desktop/Workspaces/ChronoTrace"
+        error("Could not find ChronoTrace workspace root. " +
+              "Run from the project root, or set -Dchronotrace.workspace.root=/path/to/repo")
     }
 
     @BeforeEach
@@ -50,14 +56,15 @@ class ChronoTraceIrGenerationExtensionGracefulDegradationTest {
             "Expected jar task to succeed but was $jarOutcome")
 
         val pluginJarFile = File("$workspaceRoot/chronotrace-kotlin-plugin/build/libs").listFiles()
-            ?.firstOrNull { it.name.startsWith("chronotrace-kotlin-plugin") && it.name.endsWith(".jar") }
+            ?.filter { it.name.startsWith("chronotrace-kotlin-plugin") && it.name.endsWith(".jar") }
+            ?.maxByOrNull { it.lastModified() }
             ?: throw IllegalStateException("No chronotrace-kotlin-plugin JAR found in build/libs")
         return pluginJarFile.absolutePath
     }
 
     @Test
     fun `plugin does not crash build when instrumentation fails`(@TempDir tempPath: Path) {
-        buildPluginJar()
+        val pluginJarPath = buildPluginJar()
         val dir = tempPath.toFile()
 
         File(dir, "settings.gradle.kts").writeText("""
@@ -107,6 +114,7 @@ class ChronoTraceIrGenerationExtensionGracefulDegradationTest {
 
         val result = GradleRunner.create()
             .withProjectDir(dir)
+            .withEnvironment(mapOf("CHRONOTRACE_PLUGIN_JAR" to pluginJarPath))
             .withArguments(":app:compileKotlin", "--stacktrace")
             .build()
 
@@ -116,7 +124,7 @@ class ChronoTraceIrGenerationExtensionGracefulDegradationTest {
 
     @Test
     fun `plugin logs output during compilation`(@TempDir tempPath: Path) {
-        buildPluginJar()
+        val pluginJarPath = buildPluginJar()
         val dir = tempPath.toFile()
 
         File(dir, "settings.gradle.kts").writeText("""
@@ -164,6 +172,7 @@ class ChronoTraceIrGenerationExtensionGracefulDegradationTest {
 
         val result = GradleRunner.create()
             .withProjectDir(dir)
+            .withEnvironment(mapOf("CHRONOTRACE_PLUGIN_JAR" to pluginJarPath))
             .withArguments(":app:compileKotlin", "--info")
             .build()
 

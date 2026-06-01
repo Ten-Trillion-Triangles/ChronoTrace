@@ -51,13 +51,48 @@ private val IrDeclaration.parentClassName: String?
         }
     }
 
-class ChronoTraceIrGenerationExtension : IrGenerationExtension {
+class ChronoTraceIrGenerationExtension(
+    val configuration: Configuration = Configuration(),
+) : IrGenerationExtension {
+
+    /**
+     * Plugin configuration. Read from the Kotlin compiler's
+     * [org.jetbrains.kotlin.config.CompilerConfiguration] subplugin options when
+     * the plugin is registered, but a sensible default exists for direct unit
+     * tests that instantiate the extension without going through the compiler.
+     */
+    data class Configuration(
+        /** How deep to descend into local variable types when building the captured-locals map. */
+        val captureDepth: Int = 3,
+        /** Comma-separated list of regexes; locals whose names match are excluded from the captured map. */
+        val redactionList: List<String> = emptyList(),
+    ) {
+        val redactionRegexes: List<Regex>
+            get() = redactionList.map { Regex(it) }
+
+        fun shouldRedact(localName: String): Boolean =
+            redactionRegexes.any { it.matches(localName) }
+    }
+
     override fun generate(moduleFragment: IrModuleFragment, pluginContext: IrPluginContext) {
-        val helperSymbols = HelperSymbols(pluginContext)
+        // Graceful degradation: if the ChronoTrace SDK is not on the classpath,
+        // the helper-symbol resolution in HelperSymbols' constructor will fail
+        // (its `single()` calls on the lookup lists throw NoSuchElementException).
+        // We catch and skip rather than crash the user's build.
+        val helperSymbols: HelperSymbols = try {
+            HelperSymbols(pluginContext)
+        } catch (e: Exception) {
+            println("ChronoTrace: skipping instrumentation - SDK not on classpath: ${e.javaClass.simpleName}: ${e.message}")
+            return
+        }
         var totalFunctionsVisited = 0
         var totalCallsRewritten = 0
-        val classStats = mutableMapOf<String, Pair<Int, Int>>() // className → (functionsVisited, callsRewritten)
+        // className → distinct functions in that class that had at least one call rewritten.
+        // We track the set of FQ function names per class so the same function
+        // containing multiple ChronoLogger calls is counted once.
+        val classStats = mutableMapOf<String, MutableSet<String>>()
         var currentClassName: String? = null
+        var currentFunctionFqName: String? = null
 
         moduleFragment.transformChildrenVoid(
             object : IrElementTransformerVoid() {
@@ -66,10 +101,20 @@ class ChronoTraceIrGenerationExtension : IrGenerationExtension {
                 override fun visitFunction(declaration: IrFunction): IrStatement {
                     totalFunctionsVisited++
                     currentClassName = declaration.parentClassName
+                    currentFunctionFqName = (currentClassName ?: "<top>") + "::" + declaration.name.asString()
                     scopeStack.addLast(linkedMapOf<String, IrValueDeclaration>().apply {
                         declaration.valueParameters.filter(::isVisibleLocal).forEach { put(it.name.asString(), it) }
                     })
+                    // The K2 IR generation phase runs *before* the suspend state-machine
+                    // is lowered into the inner Continuation, so a `suspend fun foo` body
+                    // is still a regular IrBlock here. The recursive
+                    // `transformChildrenVoid(this)` below visits the body and rewrites
+                    // any `ChronoLogger.*` / `withTrace` / `withSpan` calls inside.
+                    // No special "descend into inner SuspendLambda" step is required:
+                    // by the time our visitor sees the IR, the body is the user's code
+                    // directly.
                     declaration.transformChildrenVoid(this)
+
                     scopeStack.removeLast()
                     return declaration
                 }
@@ -103,44 +148,59 @@ class ChronoTraceIrGenerationExtension : IrGenerationExtension {
 
                 override fun visitCall(expression: IrCall): IrExpression {
                     expression.transformChildrenVoid(this)
-                    val rewritten = when {
-                        expression.isChronoLoggerCall() -> rewriteLoggerCall(
-                            expression,
-                            pluginContext,
-                            helperSymbols,
-                            scopeStack.visibleLocals(),
-                        )
-                        expression.isTopLevelChronoCall("withTrace") -> rewriteSpanCall(
-                            expression,
-                            pluginContext,
-                            helperSymbols.withTraceCaptured,
-                            helperSymbols,
-                            scopeStack.visibleLocals(),
-                        )
-                        expression.isTopLevelChronoCall("withSpan") -> rewriteSpanCall(
-                            expression,
-                            pluginContext,
-                            helperSymbols.withSpanCaptured,
-                            helperSymbols,
-                            scopeStack.visibleLocals(),
-                        )
-                        else -> expression
+                    val rewritten: IrExpression
+                    val didMatch = when {
+                        expression.isChronoLoggerCall() -> {
+                            rewritten = rewriteLoggerCall(
+                                expression,
+                                pluginContext,
+                                helperSymbols,
+                                scopeStack.visibleLocals(configuration),
+                            )
+                            true
+                        }
+                        expression.isTopLevelChronoCall("withTrace") -> {
+                            rewritten = rewriteSpanCall(
+                                expression,
+                                pluginContext,
+                                helperSymbols.withTraceCaptured,
+                                helperSymbols,
+                                scopeStack.visibleLocals(configuration),
+                            )
+                            true
+                        }
+                        expression.isTopLevelChronoCall("withSpan") -> {
+                            rewritten = rewriteSpanCall(
+                                expression,
+                                pluginContext,
+                                helperSymbols.withSpanCaptured,
+                                helperSymbols,
+                                scopeStack.visibleLocals(configuration),
+                            )
+                            true
+                        }
+                        else -> {
+                            rewritten = expression
+                            false
+                        }
                     }
-                    if (rewritten !== expression) {
+                    if (didMatch) {
                         totalCallsRewritten++
                         val cls = currentClassName ?: "unknown"
-                        classStats[cls] = classStats.getOrDefault(cls, 0 to 0).let { (f, c) -> f to (c + 1) }
+                        val fn = currentFunctionFqName ?: "<unknown>"
+                        val fns = classStats.getOrPut(cls) { mutableSetOf() }
+                        fns.add(fn)
                     }
                     return rewritten
                 }
             },
         )
 
-        val instrumentedFns = classStats.values.sumOf { it.first }
-        val capturedLocals = classStats.values.sumOf { it.second }
+        val instrumentedFns = classStats.values.sumOf { it.size }
+        val capturedLocals = totalCallsRewritten
         println("ChronoTrace: $instrumentedFns functions instrumented, $capturedLocals locals captured")
-        classStats.entries.take(5).forEach { (cls, stats) ->
-            println("ChronoTrace:   $cls → ${stats.first} fns, ${stats.second} locals captured")
+        classStats.entries.take(5).forEach { (cls, fns) ->
+            println("ChronoTrace:   $cls → ${fns.size} fn(s) instrumented [${fns.joinToString(", ")}]")
         }
     }
 }
@@ -153,21 +213,27 @@ private class HelperSymbols(
 
     val mergeCaptureFields: IrFunctionSymbol = pluginContext.referenceFunctions(
         CallableId(chronoPackage, Name.identifier("mergeCaptureFields")),
-    ).single()
+    ).firstOrNull()
+        ?: error("Cannot resolve required SDK symbol 'mergeCaptureFields'. The ChronoTrace SDK must be on the Kotlin compiler classpath.")
     val withTraceCaptured: IrFunctionSymbol = pluginContext.referenceFunctions(
         CallableId(chronoPackage, Name.identifier("withTraceCaptured")),
-    ).single()
+    ).firstOrNull()
+        ?: error("Cannot resolve required SDK symbol 'withTraceCaptured'. The ChronoTrace SDK must be on the Kotlin compiler classpath.")
     val withSpanCaptured: IrFunctionSymbol = pluginContext.referenceFunctions(
         CallableId(chronoPackage, Name.identifier("withSpanCaptured")),
-    ).single()
+    ).firstOrNull()
+        ?: error("Cannot resolve required SDK symbol 'withSpanCaptured'. The ChronoTrace SDK must be on the Kotlin compiler classpath.")
     val emptyMap: IrFunctionSymbol = pluginContext.referenceFunctions(
         CallableId(kotlinCollections, Name.identifier("emptyMap")),
-    ).single()
+    ).firstOrNull()
+        ?: error("Cannot resolve required SDK symbol 'kotlin.collections.emptyMap'. The Kotlin stdlib must be on the compiler classpath.")
     val mapOf: IrFunctionSymbol = pluginContext.referenceFunctions(
         CallableId(kotlinCollections, Name.identifier("mapOf")),
     )
-        .single { it.owner.valueParameters.singleOrNull()?.varargElementType != null }
-    val pairClass: IrClassSymbol = pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Pair")))!!
+        .firstOrNull { it.owner.valueParameters.singleOrNull()?.varargElementType != null }
+        ?: error("Cannot resolve required SDK symbol 'kotlin.collections.mapOf' (vararg overload). The Kotlin stdlib must be on the compiler classpath.")
+    val pairClass: IrClassSymbol = pluginContext.referenceClass(ClassId.topLevel(FqName("kotlin.Pair")))
+        ?: error("Cannot resolve required SDK symbol 'kotlin.Pair'. The Kotlin stdlib must be on the compiler classpath.")
 }
 
 private fun rewriteLoggerCall(
@@ -219,14 +285,20 @@ private fun isVisibleLocal(value: IrValueDeclaration): Boolean {
     return !name.startsWith("$") && !name.startsWith("<")
 }
 
-private fun ArrayDeque<LinkedHashMap<String, IrValueDeclaration>>.visibleLocals(): List<IrValueDeclaration> {
+private fun ArrayDeque<LinkedHashMap<String, IrValueDeclaration>>.visibleLocals(
+    configuration: ChronoTraceIrGenerationExtension.Configuration,
+): List<IrValueDeclaration> {
     val merged = linkedMapOf<String, IrValueDeclaration>()
     for (scope in this) {
         for ((name, value) in scope) {
             merged[name] = value
         }
     }
-    return merged.values.toList()
+    val limit = configuration.captureDepth.coerceAtLeast(0)
+    return merged.values
+        .toList()
+        .filterNot { configuration.shouldRedact(it.name.asString()) }
+        .take(limit)
 }
 
 private fun IrCall.isChronoLoggerCall(): Boolean {
@@ -250,7 +322,8 @@ private fun DeclarationIrBuilder.buildLocalsMap(
     helperSymbols: HelperSymbols,
     locals: List<IrValueDeclaration>,
 ): IrExpression {
-    val pairConstructor = helperSymbols.pairClass.owner.declarations.filterIsInstance<IrConstructor>().single().symbol
+    val pairConstructor = helperSymbols.pairClass.owner.declarations.filterIsInstance<IrConstructor>().firstOrNull()?.symbol
+        ?: error("Cannot resolve kotlin.Pair constructor. The Kotlin stdlib must be on the compiler classpath.")
     val pairType = pairConstructor.owner.returnType
     val pairs = locals.map { local ->
         irCallConstructor(pairConstructor, emptyList()).apply {
