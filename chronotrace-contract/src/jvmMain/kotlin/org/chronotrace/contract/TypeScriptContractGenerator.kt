@@ -28,6 +28,7 @@ class TypeScriptContractGenerator {
         enumDefinition("SpanStatus", SpanStatus.serializer()),
         enumDefinition("PurgeJobStatus", PurgeJobStatus.serializer()),
         enumDefinition("ExpressionOperator", ExpressionOperator.serializer()),
+        enumDefinition("RuleDeliveryStatus", RuleDeliveryStatus.serializer()),
         interfaceDefinition("ChronoInitConfig", ChronoInitConfig.serializer()),
         interfaceDefinition("ClientMetadata", ClientMetadata.serializer()),
         interfaceDefinition("CallStackItem", CallStackItem.serializer()),
@@ -36,9 +37,13 @@ class TypeScriptContractGenerator {
         interfaceDefinition("SpanRecord", SpanRecord.serializer()),
         interfaceDefinition("FrameSnapshot", FrameSnapshot.serializer()),
         interfaceDefinition("RemoteRule", RemoteRule.serializer()),
+        interfaceDefinition("RemoteRuleFeedback", RemoteRuleFeedback.serializer()),
+        interfaceDefinition("RuleDeliveryConfirmation", RuleDeliveryConfirmation.serializer()),
         interfaceDefinition("PurgeSelector", PurgeSelector.serializer()),
         interfaceDefinition("PurgeJob", PurgeJob.serializer()),
         interfaceDefinition("IngestBatch", IngestBatch.serializer()),
+        interfaceDefinition("IngestResponse", IngestResponse.serializer()),
+        interfaceDefinition("IngestRejection", IngestRejection.serializer()),
         interfaceDefinition("SearchLogsRequest", SearchLogsRequest.serializer()),
         interfaceDefinition("SearchLogsResponse", SearchLogsResponse.serializer()),
         interfaceDefinition("TraceView", TraceView.serializer()),
@@ -104,7 +109,7 @@ class TypeScriptContractGenerator {
             }
 
             StructureKinds.CLASS, StructureKinds.OBJECT -> serialName.substringAfterLast('.')
-            else -> "unknown"
+            else -> throw IllegalStateException("Unsupported SerialKind: ${descriptor.kind} for $serialName")
         }
         return if (descriptor.isNullable) "$baseType | null" else baseType
     }
