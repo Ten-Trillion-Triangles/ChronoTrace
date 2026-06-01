@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import org.chronotrace.contract.SearchLogsRequest
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
@@ -38,8 +39,29 @@ class E2eIntegrationTest {
 
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true; prettyPrint = true }
 
-    private val sdkEmitScript = """
-    const { ChronoTrace, ChronoLogger, startSpan, withSpan } = require('/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts/dist/src/index.js');
+    /**
+     * Resolves the workspace root (the directory containing
+     * `settings.gradle.kts` with the `chronotrace-kotlin-plugin-gradle`
+     * include) by walking up from the test's working directory. Can be
+     * overridden via `-Dchronotrace.workspace.root=/path/to/repo`.
+     */
+    private fun findSdkWorkspaceRoot(): String {
+        System.getProperty("chronotrace.workspace.root")?.let { return it }
+        var dir: File? = File(System.getProperty("user.dir"))
+        while (dir != null) {
+            val settings = dir.resolve("settings.gradle.kts")
+            if (settings.exists() &&
+                settings.readText().contains("chronotrace-kotlin-plugin-gradle")) {
+                return dir.absolutePath
+            }
+            dir = dir.parentFile
+        }
+        error("Could not find ChronoTrace workspace root. " +
+              "Run from the project root, or set -Dchronotrace.workspace.root=/path/to/repo")
+    }
+
+    private fun sdkEmitScript(workspaceRoot: String): String = """
+    const { ChronoTrace, ChronoLogger, startSpan, withSpan } = require('$workspaceRoot/sdk-ts/dist/src/index.js');
 
     async function main() {
         const serverUrl = process.argv[2];
@@ -129,8 +151,8 @@ class E2eIntegrationTest {
             waitForServer(port)
 
             // Step 2: Run SDK emit script via Node.js
-            val sdkWorkspace = "/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts"
-            val emitResult = runNodeScript(sdkEmitScript, "http://localhost:$port/api/v1/ingest", sdkWorkspace)
+            val sdkWorkspace = findSdkWorkspaceRoot()
+            val emitResult = runNodeScript(sdkEmitScript(sdkWorkspace), "http://localhost:$port/api/v1/ingest", sdkWorkspace)
 
             assertEquals(
                 0, emitResult.exitCode,
@@ -246,8 +268,9 @@ class E2eIntegrationTest {
         try {
             waitForServer(port)
 
+            val sdkWorkspace = findSdkWorkspaceRoot()
             val sdkEmitScript = """
-            const { ChronoTrace, ChronoLogger } = require('/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts/dist/src/index.js');
+            const { ChronoTrace, ChronoLogger } = require('$sdkWorkspace/sdk-ts/dist/src/index.js');
             async function main() {
                 ChronoTrace.init({
                     appId: 'field-verification',
@@ -265,7 +288,6 @@ class E2eIntegrationTest {
             main().catch(e => { console.error(e.message); process.exit(1); });
             """.trimIndent()
 
-            val sdkWorkspace = "/home/cage/Desktop/Workspaces/ChronoTrace/sdk-ts"
             val result = runNodeScript(sdkEmitScript, "http://localhost:$port/api/v1/ingest", sdkWorkspace)
             assertEquals(0, result.exitCode, "SDK failed: ${result.output}\nstderr: ${result.error}")
 
