@@ -1,8 +1,10 @@
 export function randomHex(size: number): string {
+  const bytes = new Uint8Array(size);
+  globalThis.crypto.getRandomValues(bytes);
   const alphabet = "0123456789abcdef";
   let result = "";
-  for (let index = 0; index < size; index += 1) {
-    result += alphabet[Math.floor(Math.random() * alphabet.length)];
+  for (let i = 0; i < size; i++) {
+    result += alphabet[bytes[i]! & 0x0f];
   }
   return result;
 }

@@ -12,6 +12,8 @@ export type PurgeJobStatus = "ACCEPTED" | "RUNNING" | "COMPLETED" | "FAILED";
 
 export type ExpressionOperator = "EQ" | "NEQ" | "GT" | "GTE" | "LT" | "LTE" | "CONTAINS" | "STARTS_WITH" | "ENDS_WITH" | "MATCHES" | "IN";
 
+export type RuleDeliveryStatus = "PENDING" | "CONFIRMED" | "FAILED";
+
 export interface ChronoInitConfig {
   serviceName: string;
   environment?: string;
@@ -55,6 +57,7 @@ export interface LogRecord {
   fields?: Record<string, string>;
   captureReason?: "manual_trace" | "auto_capture_level" | "remote_rule" | "crash_flush" | null;
   linkedFrameId?: string | null;
+  triggeredRuleId?: string | null;
 }
 
 export interface SpanRecord {
@@ -98,6 +101,30 @@ export interface RemoteRule {
   captureMode?: "manual_trace" | "auto_capture_level" | "remote_rule" | "crash_flush";
   sampleLimit?: number;
   createdBy: string;
+  createdAtUtc?: number | null;
+  expiresAtUtc?: number | null;
+  triggeredCount?: number;
+  lastTriggeredUtc?: number | null;
+}
+
+export interface RemoteRuleFeedback {
+  ruleId: string;
+  appId: string;
+  environment: string;
+  triggeredAtUtc: number;
+  status: "PENDING" | "CONFIRMED" | "FAILED";
+  errorMessage?: string | null;
+}
+
+export interface RuleDeliveryConfirmation {
+  deliveryId: string;
+  ruleId: string;
+  appId: string;
+  environment: string;
+  triggeredAtUtc: number;
+  status: "PENDING" | "CONFIRMED" | "FAILED";
+  confirmedAtUtc?: number | null;
+  errorMessage?: string | null;
 }
 
 export interface PurgeSelector {
@@ -121,6 +148,16 @@ export interface IngestBatch {
   logs?: LogRecord[];
   spans?: SpanRecord[];
   frameSnapshots?: FrameSnapshot[];
+}
+
+export interface IngestResponse {
+  accepted?: number[];
+  rejected?: IngestRejection[];
+}
+
+export interface IngestRejection {
+  recordIndex: number;
+  error: string;
 }
 
 export interface SearchLogsRequest {

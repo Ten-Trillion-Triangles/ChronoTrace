@@ -79,6 +79,7 @@ function resolveTransport(config: ChronoTraceConfig): ChronoTransport {
     return new HttpTransport({
       url: config.serverUrl,
       fetchImpl: config.fetchImpl,
+      auth: config.auth,
     });
   }
   return new NoopTransport();
@@ -235,6 +236,10 @@ export class ChronoTraceClient {
         await this.flush();
       },
     };
+  }
+
+  async trace(message: string, fields?: Record<string, unknown>): Promise<void> {
+    await this.log("TRACE", message, fields);
   }
 
   async debug(message: string, fields?: Record<string, unknown>): Promise<void> {

@@ -48,7 +48,7 @@ export class ChronoTrace {
 
 export class ChronoLogger {
   static trace(message: string, fields?: Record<string, unknown>): Promise<void> {
-    return requireClient().debug(message, fields);
+    return requireClient().trace(message, fields);
   }
 
   static debug(message: string, fields?: Record<string, unknown>): Promise<void> {

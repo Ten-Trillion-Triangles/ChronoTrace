@@ -1,4 +1,5 @@
 import type { IngestBatch } from "../generated/contracts.js";
+import type { AuthConfig } from "../config.js";
 import type { ChronoTransport } from "../transport.js";
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -10,6 +11,7 @@ export interface HttpTransportOptions {
   readonly headers?: Record<string, string>;
   /** Maximum retry attempts on 503 responses (default: 3) */
   readonly maxRetries?: number;
+  readonly auth?: AuthConfig;
 }
 
 export class HttpTransport implements ChronoTransport {
@@ -27,6 +29,19 @@ export class HttpTransport implements ChronoTransport {
       throw new Error("Fetch is not available for ChronoTrace HTTP transport");
     }
 
+    const authHeaders: Record<string, string> = {};
+    switch (this.options.auth?.mode) {
+      case "apiKey":
+        authHeaders["X-Api-Key"] = this.options.auth.apiKey;
+        break;
+      case "bearer":
+        authHeaders["Authorization"] = `Bearer ${this.options.auth.token}`;
+        break;
+      case "none":
+        // no header
+        break;
+    }
+
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
@@ -35,6 +50,7 @@ export class HttpTransport implements ChronoTransport {
           method: "POST",
           headers: {
             "content-type": "application/json",
+            ...authHeaders,
             ...this.options.headers,
           },
           body: JSON.stringify(batch),

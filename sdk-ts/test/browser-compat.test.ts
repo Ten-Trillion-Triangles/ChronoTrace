@@ -164,7 +164,7 @@ describe("browser / worker installability — static source analysis", () => {
     expect(pkg.os).toBeUndefined();
     expect(pkg.cpu).toBeUndefined();
     expect(pkg.files).toEqual(["dist/src/"]);
-    expect(pkg.license).toBe("Apache-2.0");
+    expect(pkg.license).toBe("MIT");
     expect(pkg.private).toBeUndefined();
   });
 

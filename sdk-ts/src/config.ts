@@ -4,7 +4,7 @@ import type { NodeProcessLike } from "./runtime.js";
 import type { ChronoTransport } from "./transport.js";
 
 export type OverflowStrategy = "DROP_OLDEST" | "DROP_NEWEST" | "BLOCK_CALLER";
-export type AuthMode = "none" | "apiKey" | "bearer" | "mTLS";
+export type AuthMode = "none" | "apiKey" | "bearer";
 export type RuntimeFlavor = "auto" | "node" | "browser";
 
 export interface CaptureConfig {
@@ -25,11 +25,15 @@ export interface BufferConfig {
   overflowStrategy: OverflowStrategy;
 }
 
+/**
+ * Authentication configuration for outbound SDK traffic.
+ *
+ * mTLS is not supported; use {@link AuthConfig} with `mode: "apiKey"` or `mode: "bearer"`.
+ */
 export type AuthConfig =
   | { mode: "none" }
   | { mode: "apiKey"; apiKey: string }
-  | { mode: "bearer"; token: string }
-  | { mode: "mTLS"; clientCertificateAlias: string };
+  | { mode: "bearer"; token: string };
 
 export interface SpanOptions {
   parent?: TraceContext;
