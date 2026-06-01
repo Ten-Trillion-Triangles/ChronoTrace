@@ -14,7 +14,8 @@ internal class TestHttpTransport(
     baseUrl: String,
     apiKey: String,
     maxRetries: Int = 3,
-) : HttpTransport(baseUrl, apiKey, maxRetries) {
+    allowInsecureBaseUrl: Boolean = true,
+) : HttpTransport(baseUrl, apiKey, maxRetries, allowInsecureBaseUrl) {
 
     override suspend fun send(batch: IngestBatch) {
         retryableSend(batch, baseUrl + "api/v1/ingest")

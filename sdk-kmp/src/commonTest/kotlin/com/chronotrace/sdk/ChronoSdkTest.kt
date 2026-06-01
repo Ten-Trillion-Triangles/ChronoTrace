@@ -71,7 +71,7 @@ class ChronoSdkTest {
         )
 
         val userId = "user-42"
-        withTrace("checkout") {
+        withTraceCaptured("checkout", mapOf("userId" to userId)) {
             ChronoLogger.info("starting")
         }
 

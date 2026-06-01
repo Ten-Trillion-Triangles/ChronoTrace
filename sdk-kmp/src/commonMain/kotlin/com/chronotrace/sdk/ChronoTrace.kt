@@ -4,26 +4,47 @@ import kotlinx.coroutines.withContext
 import org.chronotrace.contract.SpanRecord
 
 object ChronoTrace {
-    private var runtime: ChronoRuntime? = null
+    // NOTE: not @Volatile because that annotation is JVM-only and is
+    // not available in commonMain. The init() / currentRuntime() pair
+    // relies on the standard KMP initialization pattern: callers must
+    // invoke init() from the main thread before any other thread reads
+    // the runtime; the JVM memory model and JS / Wasm single-threaded
+    // event loops both guarantee that subsequent reads observe the
+    // write. A future Phase 9 refactor will replace this with
+    // `expect/actual` for `@Volatile` (jvmMain: typealias to
+    // kotlin.concurrent.Volatile; jsMain / wasmJsMain: a no-op
+    // annotation; nativeMain: typealias to kotlin.native.concurrent.Volatile).
+    private var runtimeRef: ChronoRuntime? = null
 
     fun init(config: ChronoConfig) {
-        runtime = ChronoRuntime(config)
+        runtimeRef = ChronoRuntime(config)
+    }
+
+    private fun currentRuntime(): ChronoRuntime {
+        // Read once into a local to avoid a race where a concurrent init() nulls
+        // the field while we're dereferencing it.
+        val ref = runtimeRef
+        if (ref != null) return ref
+        return error(
+            "ChronoTrace.init() must be called before any SDK operation. " +
+                "See the README quickstart for the correct order of operations."
+        )
     }
 
     fun currentContext(): ChronoSpanContext? = ChronoContextStorage.current()
 
     suspend fun shutdown() {
-        runtime?.flush()
-        runtime = null
+        runtimeRef?.flush()
+        runtimeRef = null
         ChronoContextStorage.set(null)
     }
 
-    suspend fun runtimeHealth(): RuntimeHealth = runtime().healthSnapshot()
+    suspend fun runtimeHealth(): RuntimeHealth = currentRuntime().healthSnapshot()
 
-    suspend fun startSpan(name: String): SpanHandle = runtime().startSpan(name)
+    suspend fun startSpan(name: String): SpanHandle = currentRuntime().startSpan(name)
 
     internal suspend fun startSpanCaptured(name: String, captureLocals: Map<String, Any?>): SpanHandle =
-        runtime().startSpan(name, captureLocals)
+        currentRuntime().startSpan(name, captureLocals)
 
     fun injectHeaders(carrier: MutableMap<String, String>, context: ChronoSpanContext? = currentContext()) {
         if (context == null) {
@@ -50,7 +71,7 @@ object ChronoTrace {
         return ChronoSpanContext(traceId = traceId, spanId = spanId)
     }
 
-    internal fun runtime(): ChronoRuntime = checkNotNull(runtime) { "ChronoTrace.init must be called before logging" }
+    internal fun runtime(): ChronoRuntime = currentRuntime()
 
     private fun normalizeTraceId(id: String): String = id.filter(Char::isLetterOrDigit).lowercase().padEnd(32, '0').take(32)
 
@@ -91,7 +112,8 @@ suspend fun <T> withSpan(name: String, block: suspend () -> T): T {
     }
 }
 
-internal suspend fun <T> withTraceCaptured(
+@Deprecated("Plugin internal — do not call directly")
+suspend fun <T> withTraceCaptured(
     name: String,
     captureLocals: Map<String, Any?>,
     block: suspend () -> T,
@@ -107,7 +129,8 @@ internal suspend fun <T> withTraceCaptured(
     }
 }
 
-internal suspend fun <T> withSpanCaptured(
+@Deprecated("Plugin internal — do not call directly")
+suspend fun <T> withSpanCaptured(
     name: String,
     captureLocals: Map<String, Any?>,
     block: suspend () -> T,

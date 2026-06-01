@@ -21,18 +21,27 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 
-internal actual abstract class HttpTransport
-public actual constructor(
+actual open class HttpTransport
+actual constructor(
     baseUrl: String,
     apiKey: String,
     maxRetries: Int,
+    allowInsecureBaseUrl: Boolean,
 ) : ChronoTransport {
 
     protected val baseUrl: String = baseUrl
     private val apiKey: String = apiKey
     private val maxRetries: Int = maxRetries
 
-    public actual abstract override suspend fun send(batch: IngestBatch)
+    init {
+        if (!allowInsecureBaseUrl) {
+            require(baseUrl.startsWith("https://")) { "HTTPS is required for production. Base URL must use https:// scheme." }
+        }
+    }
+
+    public actual open override suspend fun send(batch: IngestBatch) {
+        retryableSend(batch, getIngestEndpoint())
+    }
 
     private companion object {
         private const val BASE_DELAY_MS = 100L
@@ -122,11 +131,17 @@ public actual constructor(
                     return
                 }
 
-                if (responseCode == HttpStatusCode.ServiceUnavailable.value && attempt < maxRetries) {
-                    val delayMs = BASE_DELAY_MS * 2.0.pow(attempt.toDouble()).toLong()
-                    kotlinx.coroutines.delay(delayMs)
-                    lastException = Exception("HTTP 503 on attempt $attempt")
-                    continue
+                if (responseCode == HttpStatusCode.ServiceUnavailable.value) {
+                    consecutiveFailures.incrementAndGet()
+                    if (consecutiveFailures.get() >= CIRCUIT_FAILURE_THRESHOLD) {
+                        transitionToOpen()
+                    }
+                    if (attempt < maxRetries) {
+                        val delayMs = BASE_DELAY_MS * 2.0.pow(attempt.toDouble()).toLong()
+                        kotlinx.coroutines.delay(delayMs)
+                        lastException = Exception("HTTP 503 on attempt $attempt")
+                        continue
+                    }
                 }
 
                 throw Exception("HTTP $responseCode")

@@ -40,7 +40,8 @@ internal fun splitCaptureFields(fields: Map<String, Any?>): CaptureFieldSplit {
     return CaptureFieldSplit(publicFields, captureLocals)
 }
 
-internal fun mergeCaptureFields(
+@Deprecated("Plugin internal — do not call directly")
+fun mergeCaptureFields(
     fields: Map<String, Any?> = emptyMap(),
     captureLocals: Map<String, Any?>,
 ): Map<String, Any?> {
@@ -50,7 +51,9 @@ internal fun mergeCaptureFields(
     return fields + mapOf(InternalCaptureLocalsKey to captureLocals)
 }
 
-internal object ChronoCapture {
+@Deprecated("Plugin internal — do not call directly")
+object ChronoCapture {
+    @Deprecated("Plugin internal — do not call directly")
     fun sanitizeLogFields(config: CaptureConfig, fields: Map<String, Any?>): Map<String, String> {
         if (fields.isEmpty()) {
             return emptyMap()
