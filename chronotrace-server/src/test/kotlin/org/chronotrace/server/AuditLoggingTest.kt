@@ -322,11 +322,12 @@ class AuditLoggingTest {
     }
 
     // -----------------------------------------------------------------------
-    // Health endpoint is NOT audited (always public)
+    // Health endpoint: unauthenticated requests ARE audited (401),
+    // authenticated requests are NOT audited (auth succeeds, no entry)
     // -----------------------------------------------------------------------
 
     @Test
-    fun `health endpoint does not appear in audit log`() = testApplication {
+    fun `health endpoint without credentials is audited with 401 outcome`() = testApplication {
         val store = ChronoStore("apiKey", ChronoStoreOptions(
             apiKeys = setOf("health-check-key"),
             keyMetadata = mapOf(
@@ -339,12 +340,45 @@ class AuditLoggingTest {
         ))
         application { chronoTraceModule(store) }
 
-        // Hit health endpoint
-        repeat(5) {
-            client.get("/health")
-        }
+        // Hit health endpoint without credentials - should get 401
+        val healthResponse = client.get("/health")
+        assertEquals(HttpStatusCode.Unauthorized, healthResponse.status)
 
-        // Check audit log for any health entries
+        // Check audit log - the 401 attempt should be recorded
+        val auditResponse = client.get("/api/v1/admin/audit/logs") {
+            header("X-Api-Key", "health-check-key")
+        }
+        assertEquals(HttpStatusCode.OK, auditResponse.status)
+
+        val entries = json.parseToJsonElement(auditResponse.bodyAsText()).jsonObject.getValue("entries").jsonArray
+        val healthEntries = entries.filter {
+            it.jsonObject["endpoint"]?.jsonPrimitive?.content == "/health" &&
+                it.jsonObject["outcome"]?.jsonPrimitive?.content == "unauthorized"
+        }
+        assertTrue(healthEntries.isNotEmpty(), "Health endpoint with no credentials should appear in audit log with 401 outcome")
+    }
+
+    @Test
+    fun `health endpoint with valid credentials is not audited`() = testApplication {
+        val store = ChronoStore("apiKey", ChronoStoreOptions(
+            apiKeys = setOf("health-check-key"),
+            keyMetadata = mapOf(
+                "health-check-key" to ApiKeyMetadata(
+                    keyId = "health-check-key",
+                    createdAtUtc = Instant.now().toEpochMilli(),
+                    role = "admin",
+                ),
+            ),
+        ))
+        application { chronoTraceModule(store) }
+
+        // Hit health endpoint with valid credentials - should get 200
+        val healthResponse = client.get("/health") {
+            header("X-Api-Key", "health-check-key")
+        }
+        assertEquals(HttpStatusCode.OK, healthResponse.status)
+
+        // Check audit log - no health entries should be present
         val auditResponse = client.get("/api/v1/admin/audit/logs") {
             header("X-Api-Key", "health-check-key")
         }
@@ -354,7 +388,7 @@ class AuditLoggingTest {
         val healthEntries = entries.filter {
             it.jsonObject["endpoint"]?.jsonPrimitive?.content == "/health"
         }
-        assertEquals(0, healthEntries.size, "Health endpoint should not appear in audit log")
+        assertEquals(0, healthEntries.size, "Health endpoint with valid credentials should not appear in audit log")
     }
 
     // -----------------------------------------------------------------------

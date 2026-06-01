@@ -180,7 +180,7 @@ class QuotaTracker(
         val quota = metadata.quota ?: return null // no quota configured
 
         val now = System.currentTimeMillis()
-        val window = windows.getOrPut(keyId) { mutableListOf() }
+        val window = windows.computeIfAbsent(keyId) { mutableListOf() }
 
         // Prune timestamps outside the window
         val windowStart = now - TimeUnit.SECONDS.toMillis(quota.windowSeconds.toLong())
@@ -211,7 +211,7 @@ class QuotaTracker(
         val quota = metadata.quota ?: return
 
         val now = System.currentTimeMillis()
-        val window = windows.getOrPut(keyId) { mutableListOf() }
+        val window = windows.computeIfAbsent(keyId) { mutableListOf() }
 
         // Prune old timestamps before adding the new one
         val windowStart = now - TimeUnit.SECONDS.toMillis(quota.windowSeconds.toLong())

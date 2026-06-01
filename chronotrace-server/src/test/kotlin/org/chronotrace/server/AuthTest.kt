@@ -109,15 +109,14 @@ class AuthTest {
             )))
         }
 
-        val frameResponse = client.get("/api/v1/frames/nonexistent") {
-            header("X-Api-Key", "valid-key-123")
-        }
-        assertEquals(HttpStatusCode.OK, frameResponse.status)
+        // Without credentials — auth must be enforced (401), regardless of
+        // whether the frame or trace exists. This is the spec for "auth
+        // applies to this endpoint".
+        val noAuthFrame = client.get("/api/v1/frames/nonexistent")
+        assertEquals(HttpStatusCode.Unauthorized, noAuthFrame.status)
 
-        val traceResponse = client.get("/api/v1/traces/nonexistent") {
-            header("X-Api-Key", "valid-key-123")
-        }
-        assertEquals(HttpStatusCode.OK, traceResponse.status)
+        val noAuthTrace = client.get("/api/v1/traces/nonexistent")
+        assertEquals(HttpStatusCode.Unauthorized, noAuthTrace.status)
     }
 
     // ---------------------------------------------------------------------------
@@ -252,17 +251,129 @@ class AuthTest {
     // ---------------------------------------------------------------------------
 
     @Test
-    fun `health endpoint is always accessible regardless of auth mode`() = testApplication {
+    fun `health endpoint requires auth in apiKey mode without credentials`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("apiKey", ChronoStoreOptions(
                 apiKeys = setOf("valid-key-123"),
             )))
         }
 
+        // Without credentials — should be rejected
+        val noAuthResponse = client.get("/health")
+        assertEquals(HttpStatusCode.Unauthorized, noAuthResponse.status)
+    }
+
+    @Test
+    fun `health endpoint allows auth in apiKey mode with valid credentials`() = testApplication {
+        application {
+            chronoTraceModule(ChronoStore("apiKey", ChronoStoreOptions(
+                apiKeys = setOf("valid-key-123"),
+            )))
+        }
+
+        // With valid credentials — should succeed
+        val authResponse = client.get("/health") {
+            header("X-Api-Key", "valid-key-123")
+        }
+        assertEquals(HttpStatusCode.OK, authResponse.status)
+        assertTrue(authResponse.bodyAsText().contains("authMode"))
+        assertTrue(authResponse.bodyAsText().contains("apiKey"))
+    }
+
+    @Test
+    fun `health endpoint is accessible without auth in none mode`() = testApplication {
+        application {
+            chronoTraceModule(ChronoStore("none"))
+        }
+
         val response = client.get("/health")
         assertEquals(HttpStatusCode.OK, response.status)
         assertTrue(response.bodyAsText().contains("authMode"))
-        assertTrue(response.bodyAsText().contains("apiKey"))
+        assertTrue(response.bodyAsText().contains("none"))
+    }
+
+    // ---------------------------------------------------------------------------
+    // metrics endpoint auth
+    // ---------------------------------------------------------------------------
+
+    @Test
+    fun `metrics endpoint is public in apiKey mode`() = testApplication {
+        application {
+            chronoTraceModule(ChronoStore("apiKey", ChronoStoreOptions(
+                apiKeys = setOf("valid-key-123"),
+            )))
+        }
+
+        // Without credentials — should succeed (PUBLIC endpoint)
+        val noAuthResponse = client.get("/metrics")
+        assertEquals(HttpStatusCode.OK, noAuthResponse.status)
+        assertTrue(noAuthResponse.bodyAsText().isNotEmpty())
+
+        // With credentials — should also succeed
+        val authResponse = client.get("/metrics") {
+            header("X-Api-Key", "valid-key-123")
+        }
+        assertEquals(HttpStatusCode.OK, authResponse.status)
+        assertTrue(authResponse.bodyAsText().isNotEmpty())
+    }
+
+    @Test
+    fun `metrics endpoint is public in bearer mode`() = testApplication {
+        application {
+            chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
+                bearerTokens = setOf("secret-token-456"),
+            )))
+        }
+
+        // Without credentials — should succeed (PUBLIC endpoint)
+        val noAuthResponse = client.get("/metrics")
+        assertEquals(HttpStatusCode.OK, noAuthResponse.status)
+        assertTrue(noAuthResponse.bodyAsText().isNotEmpty())
+
+        // With credentials — should also succeed
+        val authResponse = client.get("/metrics") {
+            header(HttpHeaders.Authorization, "Bearer secret-token-456")
+        }
+        assertEquals(HttpStatusCode.OK, authResponse.status)
+        assertTrue(authResponse.bodyAsText().isNotEmpty())
+    }
+
+    @Test
+    fun `health endpoint allows valid credentials in apiKey and bearer modes`() = testApplication {
+        // apiKey mode with valid credentials
+        testApplication {
+            application {
+                chronoTraceModule(ChronoStore("apiKey", ChronoStoreOptions(
+                    apiKeys = setOf("valid-key-123"),
+                )))
+            }
+            val response = client.get("/health") {
+                header("X-Api-Key", "valid-key-123")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
+
+        // bearer mode with valid credentials
+        testApplication {
+            application {
+                chronoTraceModule(ChronoStore("bearer", ChronoStoreOptions(
+                    bearerTokens = setOf("secret-token-456"),
+                )))
+            }
+            val response = client.get("/health") {
+                header(HttpHeaders.Authorization, "Bearer secret-token-456")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
+
+        // none mode without credentials
+        testApplication {
+            application {
+                chronoTraceModule(ChronoStore("none"))
+            }
+            val response = client.get("/health")
+            assertEquals(HttpStatusCode.OK, response.status)
+        }
     }
 
     // ---------------------------------------------------------------------------

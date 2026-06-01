@@ -802,10 +802,10 @@ private class InMemoryChronoStorage(
 private class FileChronoStorage(
     dataDir: java.nio.file.Path,
     private val options: ChronoStoreOptions,
-    private val json: Json,
+    val json: Json,
 ) : ChronoStorage {
     private val delegate = InMemoryChronoStorage(options)
-    private val snapshotFile = dataDir.resolve("chronotrace_store.json")
+    val snapshotFile = dataDir.resolve("chronotrace_store.json")
     private val lock = ReentrantLock()
     private val logs = mutableListOf<LogRecord>()
     private val spans = mutableListOf<SpanRecord>()
@@ -893,9 +893,28 @@ private class FileChronoPurgeState(
     private val storage: FileChronoStorage,
 ) : ChronoPurgeState {
     private val jobs = ConcurrentHashMap<String, PurgeJob>()
+    private val purgeStateFile = storage.snapshotFile.parent.resolve("purge-state.json")
+
+    init {
+        if (purgeStateFile.toFile().exists()) {
+            try {
+                val loaded = storage.json.decodeFromString(ListSerializer(PurgeJob.serializer()), purgeStateFile.toFile().readText())
+                jobs.putAll(loaded.associateBy { job -> job.purgeJobId })
+            } catch (_: Exception) {
+                // Ignore corrupt file on startup
+            }
+        }
+    }
+
+    private fun persistJobs() {
+        val tempFile = purgeStateFile.resolveSibling("purge-state.json.tmp")
+        tempFile.toFile().writeText(storage.json.encodeToString(ListSerializer(PurgeJob.serializer()), jobs.values.toList()))
+        tempFile.toFile().renameTo(purgeStateFile.toFile())
+    }
 
     override fun put(job: PurgeJob) {
         jobs[job.purgeJobId] = job
+        persistJobs()
     }
 
     override fun get(purgeJobId: String): PurgeJob? = jobs[purgeJobId]
@@ -908,7 +927,14 @@ private class FileChronoPurgeState(
         it.status == PurgeJobStatus.ACCEPTED || it.status == PurgeJobStatus.RUNNING
     }.toLong()
 
-    override fun health(): Boolean? = true
+    override fun health(): Boolean? = try {
+        if (!purgeStateFile.toFile().exists()) {
+            purgeStateFile.toFile().createNewFile()
+        }
+        purgeStateFile.toFile().canWrite()
+    } catch (_: Exception) {
+        false
+    }
 }
 
 internal class ClickHouseChronoStorage(
@@ -1301,10 +1327,11 @@ internal class ClickHouseChronoStorage(
     }
 
     private fun countWhere(connection: Connection, table: String, column: String, value: String): Int {
-        connection.prepareStatement("SELECT count() FROM ${config.database}.$table WHERE $column = ?").use { statement ->
-            statement.setString(1, value)
-            statement.executeQuery().use { rs -> rs.next(); return rs.getInt(1) }
-        }
+        connection.prepareStatement("SELECT count() FROM ${config.database}.$table WHERE $column = ?")
+            .use { statement ->
+                statement.setString(1, value)
+                statement.executeQuery().use { rs -> rs.next(); return rs.getInt(1) }
+            }
     }
 override fun health(): StorageHealth {
         return try {
@@ -1675,7 +1702,7 @@ override fun health(): StorageHealth {
         serviceName = rs.getString("service_name"),
         timestampUtc = rs.getLong("timestamp_utc"),
         sequenceId = rs.getLong("sequence_id"),
-        captureReason = rs.getString("capture_reason").uppercase().let(org.chronotrace.contract.CaptureReason::valueOf),
+        captureReason = rs.getStringOrNull("capture_reason")?.uppercase()?.let(org.chronotrace.contract.CaptureReason::valueOf) ?: org.chronotrace.contract.CaptureReason.MANUAL_TRACE,
         callStack = json.decodeFromString(ListSerializer(CallStackItemSerializer), rs.getString("call_stack_json")),
         localsJson = rs.getString("locals_json"),
         serializationMetadata = json.decodeFromString(SerializationMetadataSerializer, rs.getString("serialization_metadata_json")),

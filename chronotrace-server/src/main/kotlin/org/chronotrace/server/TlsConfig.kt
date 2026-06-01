@@ -3,19 +3,22 @@ package org.chronotrace.server
 import java.io.File
 import java.io.FileInputStream
 import java.security.KeyStore
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.TrustManagerFactory
 
 /**
  * TLS/HTTPS configuration for the ChronoTrace server.
  *
- * All fields are nullable — if [keystorePath] is null, the server starts in plain HTTP mode.
- * If [keystorePath] is set but [keyAlias] is null, defaults to "chronotrace".
+ * All material fields are nullable — if [keystorePath] is null, the server starts in plain
+ * HTTP mode. If [keystorePath] is set but [keyAlias] is null, defaults to "chronotrace".
  *
- * Environment variable mapping:
- * - [TLS_KEYSTORE_PATH][keystorePath]      → TLS_KEYSTORE_PATH
- * - [TLS_KEYSTORE_PASSWORD][keystorePassword] → TLS_KEYSTORE_PASSWORD
- * - [TLS_KEY_ALIAS][keyAlias]              → TLS_KEY_ALIAS
- * - [TLS_TRUSTSTORE_PATH][truststorePath] → TLS_TRUSTSTORE_PATH
- * - [TLS_TRUSTSTORE_PASSWORD][truststorePassword] → TLS_TRUSTSTORE_PASSWORD
+ * Environment variable mapping (see [fromMap] / [fromEnvironment]):
+ * - [keystorePath]      → `TLS_KEYSTORE_PATH`
+ * - [keystorePassword]  → `TLS_KEYSTORE_PASSWORD`
+ * - [keyAlias]          → `TLS_KEY_ALIAS` (default `chronotrace`)
+ * - [truststorePath]    → `TLS_TRUSTSTORE_PATH`
+ * - [truststorePassword]→ `TLS_TRUSTSTORE_PASSWORD`
+ * - [sslPort]           → `CHRONOTRACE_TLS_SSL_PORT` (0 = "use the HTTP port")
  */
 data class TlsConfig(
     val keystorePath: String?,
@@ -23,6 +26,8 @@ data class TlsConfig(
     val keyAlias: String? = "chronotrace",
     val truststorePath: String? = null,
     val truststorePassword: String? = null,
+    /** HTTPS port. 0 means "not set" — the caller should substitute the HTTP port. */
+    val sslPort: Int = 0,
 ) {
     /**
      * Whether TLS is configured and HTTPS should be enabled.
@@ -53,22 +58,49 @@ data class TlsConfig(
         }
     }
 
+    /**
+     * The KeyManagerFactory initialised from [keyStore], or null if TLS is not configured.
+     * The factory is what the Netty engine actually consumes to build the SSL context.
+     */
+    val keyManagerFactory: KeyManagerFactory? by lazy {
+        val ks = keyStore ?: return@lazy null
+        KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
+            init(ks, keystorePassword?.toCharArray())
+        }
+    }
+
+    /**
+     * The TrustManagerFactory initialised from [trustStore], or null if no truststore was
+     * configured. Null is fine for one-way TLS; mTLS deployments should set both
+     * `TLS_TRUSTSTORE_PATH` and `TLS_TRUSTSTORE_PASSWORD`.
+     */
+    val trustManagerFactory: TrustManagerFactory? by lazy {
+        val ts = trustStore ?: return@lazy null
+        TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply {
+            init(ts)
+        }
+    }
+
     companion object {
         /**
-         * Read TLS configuration from environment variables.
-         *
-         * Returns a [TlsConfig] with all fields populated from environment variables,
-         * or with null fields if the corresponding environment variables are not set.
-         * Even with null fields, the config object is returned — use [isConfigured]
-         * to check whether HTTPS should be enabled.
+         * Production entry point — reads TLS configuration from process environment.
          */
-        fun fromEnvironment(): TlsConfig {
+        fun fromEnvironment(): TlsConfig = fromMap(System.getenv())
+
+        /**
+         * Testable factory. Reads the same variable names as [fromEnvironment] but from a
+         * caller-supplied map. This is the only function tests need to call — JDK 17+ does
+         * not allow in-process mutation of [System.getenv], so the test layer cannot set
+         * env vars on the live process and must inject them.
+         */
+        fun fromMap(env: Map<String, String?>): TlsConfig {
             return TlsConfig(
-                keystorePath = System.getenv("TLS_KEYSTORE_PATH"),
-                keystorePassword = System.getenv("TLS_KEYSTORE_PASSWORD"),
-                keyAlias = System.getenv("TLS_KEY_ALIAS") ?: "chronotrace",
-                truststorePath = System.getenv("TLS_TRUSTSTORE_PATH"),
-                truststorePassword = System.getenv("TLS_TRUSTSTORE_PASSWORD"),
+                keystorePath = env["TLS_KEYSTORE_PATH"],
+                keystorePassword = env["TLS_KEYSTORE_PASSWORD"],
+                keyAlias = env["TLS_KEY_ALIAS"] ?: "chronotrace",
+                truststorePath = env["TLS_TRUSTSTORE_PATH"],
+                truststorePassword = env["TLS_TRUSTSTORE_PASSWORD"],
+                sslPort = env["CHRONOTRACE_TLS_SSL_PORT"]?.toIntOrNull() ?: 0,
             )
         }
     }

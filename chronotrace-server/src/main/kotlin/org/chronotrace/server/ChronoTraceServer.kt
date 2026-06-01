@@ -1,7 +1,11 @@
 package org.chronotrace.server
 
+import io.ktor.server.engine.applicationEnvironment
+import io.ktor.server.engine.connector
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.engine.sslConnector
 import io.ktor.server.netty.Netty
+import io.ktor.server.netty.NettyApplicationEngine
 import java.nio.file.Paths
 
 fun main() {
@@ -48,7 +52,57 @@ fun main() {
         wsIdleTimeoutMs = System.getenv("CHRONOTRACE_WS_IDLE_TIMEOUT_MS")?.toLongOrNull() ?: 60_000L,
     )
 
-    embeddedServer(Netty, port = port, host = host) {
+    val tls = TlsConfig.fromEnvironment()
+    val effectiveSslPort = tls.sslPort.takeIf { it > 0 } ?: port
+
+    val environment = applicationEnvironment { /* default */ }
+    val engineConfig: NettyApplicationEngine.Configuration.() -> Unit = engineConfig@{
+        connector {
+            this.host = host
+            this.port = port
+        }
+        applyTlsToEngine(tls, effectiveSslPort, this)
+    }
+
+    if (tls.isConfigured) {
+        println("ChronoTrace: HTTPS enabled on port $effectiveSslPort (keyStore=${tls.keystorePath}, keyAlias=${tls.keyAlias})")
+    } else {
+        println("ChronoTrace: HTTP only on port $port (set TLS_KEYSTORE_PATH and TLS_KEYSTORE_PASSWORD to enable HTTPS)")
+    }
+
+    embeddedServer(Netty, environment, engineConfig) {
         chronoTraceModule(ChronoStore(authMode = authMode, options = options))
     }.start(wait = true)
+}
+
+/**
+ * Register an HTTPS connector on [engineConfig] when [tls] is configured.
+ *
+ * Exposed `internal` so [TlsWiringTest] can verify that, when env vars are set, the loaded
+ * `KeyStore` / `TrustStore` actually reach the Netty engine configuration — the regression
+ * that motivated this whole fix.
+ *
+ * The default [sslPort] is 0 inside [TlsConfig]; the caller (the production main) is
+ * expected to substitute the HTTP port before invoking this function. Tests pass the port
+ * explicitly so the assertion is independent of the production fallback.
+ */
+internal fun applyTlsToEngine(
+    tls: TlsConfig,
+    sslPort: Int,
+    engineConfig: NettyApplicationEngine.Configuration,
+) {
+    if (!tls.isConfigured) return
+    val keyStore = tls.keyStore
+        ?: error("TLS is configured but keyStore failed to load from ${tls.keystorePath}")
+    val password = tls.keystorePassword
+        ?: error("TLS is configured but keystorePassword is missing")
+    engineConfig.sslConnector(
+        keyStore = keyStore,
+        keyAlias = tls.keyAlias ?: "chronotrace",
+        keyStorePassword = { password.toCharArray() },
+        privateKeyPassword = { password.toCharArray() },
+    ) {
+        this.port = sslPort
+        this.trustStore = tls.trustStore
+    }
 }

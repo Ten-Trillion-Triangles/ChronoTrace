@@ -69,7 +69,7 @@ fun Application.chronoTraceModule(store: ChronoStore) {
     }
     install(StatusPages) {
         exception<Throwable> { call, cause ->
-            call.respond(mapOf("error" to (cause.message ?: "unknown error")))
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (cause.message ?: "unknown error")))
         }
     }
     // Disable automatic content negotiation for raw respondText calls
@@ -82,6 +82,14 @@ fun Application.chronoTraceModule(store: ChronoStore) {
         // ── Public endpoints (no auth, no quota, no audit) ─────────────────
 
         get("/health") {
+            val authResult = call.authCheckWithKeyId(store)
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "health", endpoint = "/health",
+                    method = "GET", outcome = "unauthorized", statusCode = 401)
+                return@get
+            }
             val health = store.health()
             // Return 503 when ClickHouse is explicitly unhealthy (configured but unreachable)
             val isDegraded = health.clickhouseHealthy == false || health.valkeyHealthy == false
@@ -181,10 +189,15 @@ fun Application.chronoTraceModule(store: ChronoStore) {
                 )
             } catch (e: RecordValidationException) {
                 store.serverMetrics.recordRejectedFrame()
+                val status = if (e.message?.contains("exceeds") == true) {
+                    HttpStatusCode.PayloadTooLarge
+                } else {
+                    HttpStatusCode.BadRequest
+                }
                 call.respondText(
                     """{"error":"record_validation_failed","frameId":"${e.recordId}","message":"${e.message?.replace("\"", "\\\"") ?: "invalid record"}}""",
                     ContentType.Application.Json,
-                    HttpStatusCode.BadRequest,
+                    status,
                 )
             } catch (e: Exception) {
                 metrics.recordIngestError()
@@ -211,6 +224,14 @@ fun Application.chronoTraceModule(store: ChronoStore) {
 
                 for (frame in incoming) {
                     if (frame is Frame.Text) {
+                        // Per-frame quota enforcement: a long-lived WS connection could
+                        // otherwise exceed its quota window without ever being re-checked.
+                        if (!call.quotaCheck(store, keyId)) {
+                            send(Frame.Text("""{"error":"quota_exceeded"}"""))
+                            call.recordAudit(store, keyId = keyId, action = "ingest_ws", endpoint = "/api/v1/ingest/ws",
+                                method = "WS", outcome = "rate_limited", statusCode = 429)
+                            return@webSocket
+                        }
                         metrics.recordIngest()
                         val start = System.currentTimeMillis()
                         try {
@@ -294,7 +315,11 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             val logId = requireNotNull(call.parameters["logId"])
             val log = store.getLog(logId)
             keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
-            call.respond(log ?: mapOf("error" to "Log not found"))
+            if (log == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Log not found"))
+            } else {
+                call.respond(log)
+            }
             call.recordAudit(store, keyId = keyId, action = "get_log", endpoint = "/api/v1/logs/{logId}",
                 method = "GET", outcome = if (log != null) "success" else "not_found",
                 statusCode = if (log != null) 200 else 404, durationMs = System.currentTimeMillis() - start)
@@ -316,10 +341,38 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             val frameId = requireNotNull(call.parameters["frameId"])
             val frame = store.getFrame(frameId)
             keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
-            call.respond(frame ?: mapOf("error" to "Frame not found"))
+            if (frame == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Frame not found"))
+            } else {
+                call.respond(frame)
+            }
             call.recordAudit(store, keyId = keyId, action = "get_frame", endpoint = "/api/v1/frames/{frameId}",
                 method = "GET", outcome = if (frame != null) "success" else "not_found",
                 statusCode = if (frame != null) 200 else 404, durationMs = System.currentTimeMillis() - start)
+        }
+
+        get("/api/v1/frames/{frameId}/step") {
+            val authResult = call.authCheckWithKeyId(store)
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "step_frame", endpoint = "/api/v1/frames/{frameId}/step",
+                    method = "GET", outcome = "unauthorized", statusCode = 401)
+                return@get
+            }
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@get
+
+            val start = System.currentTimeMillis()
+            val frameId = requireNotNull(call.parameters["frameId"])
+            val direction = call.request.queryParameters["direction"] ?: "next"
+            val count = call.request.queryParameters["count"]?.toIntOrNull() ?: 1
+            val cursor = call.request.queryParameters["cursor"]
+            val result = store.stepFrame(frameId, direction, count, cursor)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
+            call.respond(result)
+            call.recordAudit(store, keyId = keyId, action = "step_frame", endpoint = "/api/v1/frames/{frameId}/step",
+                method = "GET", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
         }
 
         get("/api/v1/traces/{traceId}") {
@@ -382,6 +435,36 @@ fun Application.chronoTraceModule(store: ChronoStore) {
             call.respond(rules)
             call.recordAudit(store, keyId = keyId, action = "list_rules", endpoint = "/api/v1/remote-rules",
                 method = "GET", outcome = "success", statusCode = 200, durationMs = System.currentTimeMillis() - start)
+        }
+
+        delete("/api/v1/remote-rules/{ruleId}") {
+            val authResult = call.authCheckWithKeyId(store)
+            if (authResult == null) {
+                // none mode — continue without auth
+            } else if (!authResult.first) {
+                call.recordAudit(store, keyId = authResult.second, action = "delete_rule", endpoint = "/api/v1/remote-rules/{ruleId}",
+                    method = "DELETE", outcome = "unauthorized", statusCode = 401)
+                return@delete
+            }
+            val keyId = authResult?.second
+            if (keyId != null && !call.quotaCheck(store, keyId)) return@delete
+
+            val start = System.currentTimeMillis()
+            val ruleId = call.parameters["ruleId"]
+            if (ruleId == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "ruleId is required"))
+                return@delete
+            }
+            val deleted = store.deleteRule(ruleId)
+            keyId?.let { store.recordRequest(it) } ?: store.recordRequest("none")
+            if (deleted) {
+                call.respond(HttpStatusCode.NoContent)
+            } else {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "rule not found"))
+            }
+            call.recordAudit(store, keyId = keyId, action = "delete_rule", endpoint = "/api/v1/remote-rules/{ruleId}",
+                method = "DELETE", outcome = if (deleted) "success" else "not_found",
+                statusCode = if (deleted) 204 else 404, durationMs = System.currentTimeMillis() - start)
         }
 
         // POST /api/v1/remote-rules/feedback — SDK reports rule delivery outcome

@@ -102,14 +102,25 @@ class ServerMetricsTest {
     }
 
     @Test
-    fun `metrics endpoint has no auth requirement`() = testApplication {
+    fun `metrics endpoint does not require auth even when store requires auth`() = testApplication {
         application {
             chronoTraceModule(ChronoStore("apiKey")) // requires auth
         }
 
-        // Accessing /metrics must not require auth
+        // /metrics is a public endpoint - should return 200 without credentials
         val response = client.get("/metrics")
-        assertEquals(HttpStatusCode.OK, response.status, "/metrics should be accessible without auth")
+        assertEquals(HttpStatusCode.OK, response.status, "/metrics is public and should not require auth")
+    }
+
+    @Test
+    fun `metrics endpoint is accessible when store is in none mode`() = testApplication {
+        application {
+            chronoTraceModule(ChronoStore("none")) // no auth required
+        }
+
+        // In none mode, /metrics should be accessible
+        val response = client.get("/metrics")
+        assertEquals(HttpStatusCode.OK, response.status, "/metrics should be accessible without auth in none mode")
     }
 
     @Test
