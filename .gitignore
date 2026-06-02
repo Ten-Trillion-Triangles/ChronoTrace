@@ -56,4 +56,7 @@ TStep-Code-Index-Enhancement-Plan.md
 *.key
 keystore.jks
 truststore.jks
-/docs/maestro/plans
+
+# Maestro orchestration internal state (not for public repo)
+docs/maestro/.workspace-root
+docs/maestro/state/*.design-gate.json
