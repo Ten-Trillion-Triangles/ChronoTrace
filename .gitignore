@@ -56,3 +56,4 @@ TStep-Code-Index-Enhancement-Plan.md
 *.key
 keystore.jks
 truststore.jks
+/docs/maestro/plans
