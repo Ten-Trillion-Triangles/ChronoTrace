@@ -1,3 +1,5 @@
+**[Ten Trillion Triangles](https://tentrilliontriangles.com)** — **[TPipe](https://tentrilliontriangles.com/blog)**
+
 # ChronoTrace
 
 AI-native structured logging that captures local variable state so LLMs can debug code after execution. Capture logs, spans, and frame snapshots across distributed services — then query via HTTP REST, WebSocket, or MCP.
@@ -238,3 +240,7 @@ MCP server: 11 tools exposed at `POST /mcp` (search_logs, get_log, get_frame_sna
 - **clickhouse** — JDBC-based ClickHouse with TTL, async inserts, circuit breaker queue. Production storage.
 
 Purge job state: in-memory (dev/test) or Valkey/Redis (production).
+
+---
+
+**Made with [TPipe](https://tentrilliontriangles.com/blog) by [Ten Trillion Triangles](https://tentrilliontriangles.com)**
